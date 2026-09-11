@@ -113,6 +113,16 @@ namespace SysMonitor
         public string ConnFailedFormat { get; set; }
         public string SavedToast { get; set; }
         public string ThemeSelect { get; set; }
+
+        // Update
+        public string CheckUpdate { get; set; }
+        public string CheckingUpdate { get; set; }
+        public string AlreadyLatest { get; set; }
+        public string NewVersionFound { get; set; }
+        public string DownloadUpdate { get; set; }
+        public string UpdateFailed { get; set; }
+        public string CurrentVersionFormat { get; set; }
+        public string ViewOnGitHub { get; set; }
         public string LangSelect { get; set; }
         public string ThemeDark { get; set; }
         public string ThemeLight { get; set; }
@@ -260,6 +270,14 @@ namespace SysMonitor
                 ConnFailedFormat = "✕ 连接失败: {0}",
                 SavedToast = "✓ 接入配置已成功加密保存！",
                 ThemeSelect = "界面主题风格:",
+                CheckUpdate = "检查更新",
+                CheckingUpdate = "正在检查更新...",
+                AlreadyLatest = "✓ 当前已是最新版本",
+                NewVersionFound = "发现新版本",
+                DownloadUpdate = "拉取更新",
+                UpdateFailed = "检查更新失败",
+                CurrentVersionFormat = "当前版本: {0}",
+                ViewOnGitHub = "前往 GitHub 查看",
                 LangSelect = "系统界面语言:",
                 ThemeDark = "🌙 深色模式",
                 ThemeLight = "☀️ 浅色模式",
@@ -407,6 +425,14 @@ namespace SysMonitor
                 ConnFailedFormat = "✕ Connection failed: {0}",
                 SavedToast = "✓ Settings encrypted and saved!",
                 ThemeSelect = "Interface Theme:",
+                CheckUpdate = "Check Update",
+                CheckingUpdate = "Checking for updates...",
+                AlreadyLatest = "✓ Already up to date",
+                NewVersionFound = "New version available",
+                DownloadUpdate = "Update Now",
+                UpdateFailed = "Failed to check update",
+                CurrentVersionFormat = "Version: {0}",
+                ViewOnGitHub = "View on GitHub",
                 LangSelect = "Display Language:",
                 ThemeDark = "🌙 Dark Mode",
                 ThemeLight = "☀️ Light Mode",

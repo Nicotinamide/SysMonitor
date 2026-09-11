@@ -67,17 +67,22 @@ namespace SysMonitor
 
         public void UpdateZeroTierCardsVisibility()
         {
-            // ZeroTier Mesh & Moons 是本机本地守护进程状态，绝不受到 Web API Token 的影响！
+            // 上方：ZeroTier 虚拟局域网 & Moon 列表 —— 本地客户端状态，完全不受到 Web API Token 的影响！
             if (_cardZt != null)
             {
                 bool isZtAvailable = _lastZt == null || _lastZt.IsInstalled || _lastZt.IsRunning;
                 _cardZt.Visibility = isZtAvailable ? Visibility.Visible : Visibility.Collapsed;
             }
+
+            // 下方：成员设备列表 —— 远程 Web 控制器 API 数据，严格受到 Token 影响！未配置 Token 时折叠隐藏，配置后正常展示
             if (_cardMember != null)
             {
-                _cardMember.Visibility = Visibility.Visible;
+                _cardMember.Visibility = HasConfiguredToken ? Visibility.Visible : Visibility.Collapsed;
             }
         }
+        private TextBlock _tbUpdateStatus;
+        private StackPanel _pnlUpdateActions;
+        private Button _btnPullUpdate;
         private TextBox _tbMemberSearch;
         private TextBlock _tbMemberSearchPlaceholder;
         private Button _btnMemberClear;
@@ -296,6 +301,13 @@ namespace SysMonitor
             headerGrid.Children.Add(titleSp);
 
             StackPanel topBtns = new StackPanel { Orientation = Orientation.Horizontal };
+            Button btnUpdate = AppTheme.CreateIconButton("🔄", i18n.CheckUpdate, delegate
+            {
+                CheckForAppUpdates(true);
+            }, 11);
+            btnUpdate.Margin = new Thickness(0, 0, 4, 0);
+            topBtns.Children.Add(btnUpdate);
+
             Button btnSettings = AppTheme.CreateIconButton("⚙", i18n.SettingsTitle, delegate
             {
                 ToggleSettingsView();
@@ -1002,6 +1014,97 @@ namespace SysMonitor
             };
             sfSp.Children.Add(_lblTestStatus);
 
+            // Section: GitHub 状态与在线更新
+            Border updateBox = new Border
+            {
+                Background = theme.InnerTileBg,
+                CornerRadius = new CornerRadius(6),
+                BorderBrush = theme.BorderMuted,
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(0, 4, 0, 4)
+            };
+
+            StackPanel updateSp = new StackPanel();
+            Grid upHeadGrid = new Grid();
+            upHeadGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            upHeadGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel vSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock lblVer = CreateMutedText(theme, string.Format(i18n.CurrentVersionFormat, UpdateChecker.CurrentVersion));
+            lblVer.FontWeight = FontWeights.SemiBold;
+            vSp.Children.Add(lblVer);
+            Grid.SetColumn(vSp, 0);
+            upHeadGrid.Children.Add(vSp);
+
+            StackPanel upBtnSp = new StackPanel { Orientation = Orientation.Horizontal };
+            Button btnCheckUp = new Button
+            {
+                Content = "🔄 " + i18n.CheckUpdate,
+                FontSize = 10,
+                Foreground = theme.AccentBlue,
+                Background = new SolidColorBrush(Color.FromArgb(25, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(6, 2, 6, 2),
+                Cursor = Cursors.Hand
+            };
+            btnCheckUp.Click += delegate { CheckForAppUpdates(true); };
+            upBtnSp.Children.Add(btnCheckUp);
+
+            Grid.SetColumn(upBtnSp, 1);
+            upHeadGrid.Children.Add(upBtnSp);
+            updateSp.Children.Add(upHeadGrid);
+
+            // Update status text
+            _tbUpdateStatus = new TextBlock
+            {
+                Text = "",
+                FontSize = 9.5,
+                Margin = new Thickness(0, 4, 0, 2),
+                Foreground = theme.TextMuted,
+                TextWrapping = TextWrapping.Wrap,
+                Visibility = Visibility.Collapsed
+            };
+            updateSp.Children.Add(_tbUpdateStatus);
+
+            // Action row: Pull update button & open github
+            _pnlUpdateActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0), Visibility = Visibility.Collapsed };
+            _btnPullUpdate = new Button
+            {
+                Content = "⬇ " + i18n.DownloadUpdate,
+                FontSize = 10,
+                Foreground = theme.AccentEmerald,
+                Background = new SolidColorBrush(Color.FromArgb(30, theme.AccentEmerald.Color.R, theme.AccentEmerald.Color.G, theme.AccentEmerald.Color.B)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, theme.AccentEmerald.Color.R, theme.AccentEmerald.Color.G, theme.AccentEmerald.Color.B)),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3, 8, 3),
+                Margin = new Thickness(0, 0, 6, 0),
+                Cursor = Cursors.Hand
+            };
+            _pnlUpdateActions.Children.Add(_btnPullUpdate);
+
+            Button btnOpenRepo = new Button
+            {
+                Content = "🌐 GitHub",
+                FontSize = 10,
+                Foreground = theme.TextSecondary,
+                Background = theme.CardBg,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3, 8, 3),
+                Cursor = Cursors.Hand
+            };
+            btnOpenRepo.Click += delegate
+            {
+                try { Process.Start("https://github.com/Nicotinamide/SysMonitor"); } catch { }
+            };
+            _pnlUpdateActions.Children.Add(btnOpenRepo);
+
+            updateSp.Children.Add(_pnlUpdateActions);
+            updateBox.Child = updateSp;
+            sfSp.Children.Add(updateBox);
+
             // Actions row: [⚡ 测试连接]  [💾 保存]  [✕ 关闭]
             Grid btnGrid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
             btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1117,6 +1220,98 @@ namespace SysMonitor
             overlay.Child = svOverlay;
 
             return overlay;
+        }
+
+        public void CheckForAppUpdates(bool isInteractive)
+        {
+            if (_overlaySettings != null && _overlaySettings.Visibility != Visibility.Visible && isInteractive)
+            {
+                ToggleSettingsView();
+            }
+
+            if (_tbUpdateStatus != null)
+            {
+                _tbUpdateStatus.Visibility = Visibility.Visible;
+                _tbUpdateStatus.Text = "⏳ " + I18n.Current.CheckingUpdate;
+                _tbUpdateStatus.Foreground = AppTheme.Current.TextMuted;
+            }
+            if (_pnlUpdateActions != null)
+            {
+                _pnlUpdateActions.Visibility = Visibility.Collapsed;
+            }
+
+            UpdateChecker.CheckForUpdatesAsync(delegate(UpdateInfo info)
+            {
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (_tbUpdateStatus == null) return;
+                    ThemePalette theme = AppTheme.Current;
+                    TranslationSet i18n = I18n.Current;
+
+                    if (!info.Success)
+                    {
+                        _tbUpdateStatus.Text = string.Format("✕ {0}: {1}", i18n.UpdateFailed, info.ErrorMessage);
+                        _tbUpdateStatus.Foreground = theme.AccentRed;
+                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
+                        return;
+                    }
+
+                    if (info.HasUpdate)
+                    {
+                        string notes = !string.IsNullOrEmpty(info.ReleaseNotes) ? ("\n" + info.ReleaseNotes.Trim()) : "";
+                        _tbUpdateStatus.Text = string.Format("🚀 {0}: {1}{2}", i18n.NewVersionFound, info.LatestVersion, notes);
+                        _tbUpdateStatus.Foreground = theme.AccentEmerald;
+
+                        if (_btnPullUpdate != null)
+                        {
+                            _btnPullUpdate.Content = "⬇ " + i18n.DownloadUpdate + " (" + info.LatestVersion + ")";
+                            _btnPullUpdate.Click += delegate
+                            {
+                                if (!string.IsNullOrEmpty(info.DownloadUrl))
+                                {
+                                    _tbUpdateStatus.Text = "⏳ " + i18n.CheckingUpdate;
+                                    _btnPullUpdate.IsEnabled = false;
+                                    UpdateChecker.DownloadAndApplyUpdateAsync(info.DownloadUrl,
+                                        delegate(int pct)
+                                        {
+                                            Dispatcher.BeginInvoke(new Action(delegate
+                                            {
+                                                _tbUpdateStatus.Text = string.Format("⏳ 下载中... {0}%", pct);
+                                            }));
+                                        },
+                                        delegate(bool ok, string msg)
+                                        {
+                                            Dispatcher.BeginInvoke(new Action(delegate
+                                            {
+                                                _btnPullUpdate.IsEnabled = true;
+                                                _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
+                                            }));
+                                        });
+                                }
+                                else
+                                {
+                                    try { Process.Start(info.ReleasePageUrl); } catch { }
+                                }
+                            };
+                        }
+                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
+                    }
+                    else if (info.IsCommitBased)
+                    {
+                        string msg = !string.IsNullOrEmpty(info.ReleaseNotes) ? ("\n" + info.ReleaseNotes.Trim()) : "";
+                        _tbUpdateStatus.Text = string.Format("{0} ({1})\nGitHub: [{2}]{3}",
+                            i18n.AlreadyLatest, UpdateChecker.CurrentVersion, info.LatestCommitSha, msg);
+                        _tbUpdateStatus.Foreground = theme.AccentEmerald;
+                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
+                    }
+                    else
+                    {
+                        _tbUpdateStatus.Text = string.Format("{0} ({1})", i18n.AlreadyLatest, UpdateChecker.CurrentVersion);
+                        _tbUpdateStatus.Foreground = theme.AccentEmerald;
+                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
+                    }
+                }));
+            });
         }
 
         private void BuildModulesSection(StackPanel sfSp, ThemePalette theme, TranslationSet i18n)
