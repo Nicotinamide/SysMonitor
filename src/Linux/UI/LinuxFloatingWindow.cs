@@ -38,6 +38,13 @@ namespace SysMonitor.Linux.UI
         private TextBlock _tbZtStatus;
         private TextBlock _tbZtSub;
 
+        // Complication Tile Controls - Compute
+        private Border _bComputeTile;
+        private TextBlock _tbComputeCpuVal;
+        private TextBlock _tbComputeRamVal;
+        private Border _rectComputeCpuBar;
+        private Border _rectComputeRamBar;
+
         // Telemetry Engine & Cache
         private LinuxTelemetryEngine _engine;
         private LinuxSystemLoadData _lastLoad;
@@ -71,11 +78,14 @@ namespace SysMonitor.Linux.UI
             PointerMoved += OnPointerMoved;
             PointerReleased += OnPointerReleased;
 
-            LinuxTheme.ThemeChanged += () =>
+            LinuxSettings.SettingsChanged += () =>
             {
-                BuildUi();
-                SetupContextMenu();
-                ReplayTelemetry();
+                Dispatcher.UIThread.Post(() =>
+                {
+                    BuildUi();
+                    SetupContextMenu();
+                    ReplayTelemetry();
+                });
             };
 
             Opened += (s, e) =>
@@ -101,6 +111,7 @@ namespace SysMonitor.Linux.UI
         private void BuildUi()
         {
             var theme = LinuxTheme.Current;
+            var i18n = I18n.Current;
 
             _rootBorder = new Border
             {
@@ -115,22 +126,36 @@ namespace SysMonitor.Linux.UI
 
             _spMain = new StackPanel { Spacing = 4 };
 
-            // 1. Power Tile (供电与功耗)
-            _spMain.Children.Add(BuildPowerTile(theme));
+            var order = LinuxSettings.ModuleOrder;
+            var enabled = LinuxSettings.ModuleEnabled;
 
-            // 2. Network Tile (网络与公网出口)
-            _spMain.Children.Add(BuildNetworkTile(theme));
+            foreach (var mod in order)
+            {
+                if (!enabled.Contains(mod)) continue;
 
-            // 3. ZeroTier Tile (虚拟局域网与 Moon)
-            _spMain.Children.Add(BuildZeroTierTile(theme));
-
-            // (Compute Tile is OFF by default on the widget, matches Windows 1:1)
+                if (mod == LinuxSettings.ModulePower)
+                {
+                    _spMain.Children.Add(BuildPowerTile(theme, i18n));
+                }
+                else if (mod == LinuxSettings.ModuleNetwork)
+                {
+                    _spMain.Children.Add(BuildNetworkTile(theme, i18n));
+                }
+                else if (mod == LinuxSettings.ModuleZeroTier)
+                {
+                    _spMain.Children.Add(BuildZeroTierTile(theme, i18n));
+                }
+                else if (mod == LinuxSettings.ModuleCompute)
+                {
+                    _spMain.Children.Add(BuildComputeTile(theme, i18n));
+                }
+            }
 
             _rootBorder.Child = _spMain;
             Content = _rootBorder;
         }
 
-        private Border BuildPowerTile(LinuxThemePalette theme)
+        private Border BuildPowerTile(LinuxThemePalette theme, TranslationSet i18n)
         {
             _bPowerTile = LinuxTheme.CreateComplicationBorder();
             var grid = new Grid { Margin = new Thickness(6, 4, 6, 4) };
@@ -223,7 +248,7 @@ namespace SysMonitor.Linux.UI
             return _bPowerTile;
         }
 
-        private Border BuildNetworkTile(LinuxThemePalette theme)
+        private Border BuildNetworkTile(LinuxThemePalette theme, TranslationSet i18n)
         {
             _bNetTile = LinuxTheme.CreateComplicationBorder();
             var sp = new StackPanel { Margin = new Thickness(6, 4, 6, 4) };
@@ -248,7 +273,7 @@ namespace SysMonitor.Linux.UI
             };
             _tbPublicIp = new TextBlock
             {
-                Text = "获取中...",
+                Text = i18n.NetFetching,
                 FontSize = 9.5,
                 FontWeight = FontWeight.Bold,
                 Foreground = theme.AccentBlue,
@@ -265,7 +290,7 @@ namespace SysMonitor.Linux.UI
             return _bNetTile;
         }
 
-        private Border BuildZeroTierTile(LinuxThemePalette theme)
+        private Border BuildZeroTierTile(LinuxThemePalette theme, TranslationSet i18n)
         {
             _bZtTile = LinuxTheme.CreateComplicationBorder();
             var grid = new Grid { Margin = new Thickness(6, 4, 6, 4) };
@@ -332,14 +357,126 @@ namespace SysMonitor.Linux.UI
             return _bZtTile;
         }
 
+        private Border BuildComputeTile(LinuxThemePalette theme, TranslationSet i18n)
+        {
+            _bComputeTile = LinuxTheme.CreateComplicationBorder();
+            var grid = new Grid { Margin = new Thickness(6, 4, 6, 4) };
+            grid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+            grid.RowDefinitions.Add(new RowDefinition(3, GridUnitType.Pixel));
+            grid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+
+            var topGrid = new Grid();
+            topGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            topGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var spCpu = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var tbCpuLabel = new TextBlock
+            {
+                Text = "CPU ",
+                FontSize = 9,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _tbComputeCpuVal = new TextBlock
+            {
+                Text = "0.0%",
+                FontSize = 9.5,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentBlue,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spCpu.Children.Add(tbCpuLabel);
+            spCpu.Children.Add(_tbComputeCpuVal);
+            Grid.SetColumn(spCpu, 0);
+            topGrid.Children.Add(spCpu);
+
+            var spRam = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+            var tbRamLabel = new TextBlock
+            {
+                Text = "RAM ",
+                FontSize = 9,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _tbComputeRamVal = new TextBlock
+            {
+                Text = "0%",
+                FontSize = 9.5,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spRam.Children.Add(tbRamLabel);
+            spRam.Children.Add(_tbComputeRamVal);
+            Grid.SetColumn(spRam, 1);
+            topGrid.Children.Add(spRam);
+
+            Grid.SetRow(topGrid, 0);
+            grid.Children.Add(topGrid);
+
+            var barGrid = new Grid { VerticalAlignment = VerticalAlignment.Center };
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition(6, GridUnitType.Pixel));
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
+            var trackCpu = new Border
+            {
+                Background = theme.ProgressBarTrack,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            _rectComputeCpuBar = new Border
+            {
+                Background = theme.AccentBlue,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                Width = 2,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            trackCpu.Child = _rectComputeCpuBar;
+            Grid.SetColumn(trackCpu, 0);
+            barGrid.Children.Add(trackCpu);
+
+            var trackRam = new Border
+            {
+                Background = theme.ProgressBarTrack,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            _rectComputeRamBar = new Border
+            {
+                Background = theme.AccentEmerald,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                Width = 2,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            trackRam.Child = _rectComputeRamBar;
+            Grid.SetColumn(trackRam, 2);
+            barGrid.Children.Add(trackRam);
+
+            Grid.SetRow(barGrid, 2);
+            grid.Children.Add(barGrid);
+
+            _bComputeTile.Child = grid;
+            return _bComputeTile;
+        }
+
         private void SetupContextMenu()
         {
+            var theme = LinuxTheme.Current;
+            var i18n = I18n.Current;
             var menu = new ContextMenu();
-            var miDetail = new MenuItem { Header = "📋 展开 / 收起详情看板" };
+
+            var miDetail = new MenuItem { Header = "📋 " + i18n.MenuDetail };
             miDetail.Click += (s, e) => ToggleDetailWindow();
             menu.Items.Add(miDetail);
 
-            var miSearch = new MenuItem { Header = "🔍 搜索节点与 IP" };
+            var miSearch = new MenuItem { Header = "🔍 " + i18n.MenuSearch };
             miSearch.Click += (s, e) =>
             {
                 if (_detailWindow == null || !_detailWindow.IsVisible) ToggleDetailWindow();
@@ -347,19 +484,23 @@ namespace SysMonitor.Linux.UI
             };
             menu.Items.Add(miSearch);
 
-            var miRefresh = new MenuItem { Header = "⟳ 刷新公网出口与遥测" };
+            var miRefresh = new MenuItem { Header = i18n.Lang == AppLanguage.Zh ? "⟳ 刷新公网出口与遥测" : "⟳ Refresh Public IP & Telemetry" };
             miRefresh.Click += (s, e) => _engine?.TriggerGeoIpRefresh();
             menu.Items.Add(miRefresh);
 
             menu.Items.Add(new Separator());
 
-            var miTheme = new MenuItem { Header = LinuxTheme.Current.IsDark ? "☀️ 切换为浅色模式" : "🌙 切换为深色模式" };
-            miTheme.Click += (s, e) => LinuxTheme.SetDark(!LinuxTheme.Current.IsDark);
+            var miTheme = new MenuItem { Header = LinuxSettings.IsDark ? i18n.ThemeLight : i18n.ThemeDark };
+            miTheme.Click += (s, e) => LinuxSettings.SetTheme(!LinuxSettings.IsDark);
             menu.Items.Add(miTheme);
+
+            var miLang = new MenuItem { Header = LinuxSettings.Language == AppLanguage.Zh ? "🇺🇸 English" : "🇨🇳 简体中文" };
+            miLang.Click += (s, e) => LinuxSettings.SetLanguage(LinuxSettings.Language == AppLanguage.Zh ? AppLanguage.En : AppLanguage.Zh);
+            menu.Items.Add(miLang);
 
             menu.Items.Add(new Separator());
 
-            var miExit = new MenuItem { Header = "🚪 退出 SysMonitor" };
+            var miExit = new MenuItem { Header = "🚪 " + i18n.MenuExit };
             miExit.Click += (s, e) =>
             {
                 _detailWindow?.Close();
@@ -454,6 +595,32 @@ namespace SysMonitor.Linux.UI
         private void OnSystemLoadUpdated(LinuxSystemLoadData data)
         {
             _lastLoad = data;
+            var theme = LinuxTheme.Current;
+
+            if (_tbComputeCpuVal != null)
+            {
+                _tbComputeCpuVal.Text = $"{data.CpuPercent:0.0}%";
+                _tbComputeCpuVal.Foreground = data.CpuPercent > 80.0 ? theme.AccentRed : (data.CpuPercent > 50.0 ? theme.AccentAmber : theme.AccentBlue);
+            }
+            if (_rectComputeCpuBar != null)
+            {
+                _rectComputeCpuBar.Background = data.CpuPercent > 80.0 ? theme.AccentRed : (data.CpuPercent > 50.0 ? theme.AccentAmber : theme.AccentBlue);
+                double trackW = 50.0;
+                _rectComputeCpuBar.Width = Math.Max(2, Math.Min(trackW, (data.CpuPercent / 100.0) * trackW));
+            }
+
+            if (_tbComputeRamVal != null)
+            {
+                _tbComputeRamVal.Text = $"{data.RamPercent}%";
+                _tbComputeRamVal.Foreground = data.RamPercent > 85 ? theme.AccentRed : theme.TextPrimary;
+            }
+            if (_rectComputeRamBar != null)
+            {
+                _rectComputeRamBar.Background = data.RamPercent > 85 ? theme.AccentRed : theme.AccentEmerald;
+                double trackW = 50.0;
+                _rectComputeRamBar.Width = Math.Max(2, Math.Min(trackW, (data.RamPercent / 100.0) * trackW));
+            }
+
             _detailWindow?.UpdateSystemLoad(data);
         }
 
@@ -461,6 +628,7 @@ namespace SysMonitor.Linux.UI
         {
             _lastPower = data;
             var theme = LinuxTheme.Current;
+            var i18n = I18n.Current;
 
             if (_tbBatteryPercent != null)
                 _tbBatteryPercent.Text = $"{data.BatteryPercent}%";
@@ -468,7 +636,12 @@ namespace SysMonitor.Linux.UI
             if (_tbPcWatts != null)
                 _tbPcWatts.Text = data.CpuWatts > 0.5 ? $"{data.CpuWatts:0.0}W" : "--";
 
-            IBrush pBrush = (data.StateKind == LinuxPowerStateKind.ChargedFull || data.StateKind == LinuxPowerStateKind.AcDirect)
+            bool isEmerald = data.StateKind == LinuxPowerStateKind.ChargedFull
+                          || data.StateKind == LinuxPowerStateKind.AcDirect
+                          || data.StateKind == LinuxPowerStateKind.DesktopAc
+                          || data.BatteryPercent >= 98;
+
+            IBrush pBrush = isEmerald
                 ? theme.AccentEmerald
                 : (data.StateKind == LinuxPowerStateKind.ChargingFast ? theme.AccentBlue : theme.AccentAmber);
 
@@ -482,7 +655,22 @@ namespace SysMonitor.Linux.UI
 
             if (_tbWatts != null)
             {
-                _tbWatts.Text = data.StatusText;
+                if (isEmerald)
+                {
+                    _tbWatts.Text = data.BatteryPercent >= 95 ? i18n.PowerFull : i18n.PowerAcOnline;
+                }
+                else if (data.StateKind == LinuxPowerStateKind.ChargingFast)
+                {
+                    _tbWatts.Text = data.Watts > 0.5 ? $"+{data.Watts:0.0}W" : i18n.PowerCharging;
+                }
+                else if (data.StateKind == LinuxPowerStateKind.DischargingNormal || data.StateKind == LinuxPowerStateKind.DischargingLow)
+                {
+                    _tbWatts.Text = data.Watts > 0.5 ? $"-{data.Watts:0.0}W" : i18n.PowerDischarging;
+                }
+                else
+                {
+                    _tbWatts.Text = data.StatusText;
+                }
                 _tbWatts.Foreground = pBrush;
             }
 
@@ -492,11 +680,13 @@ namespace SysMonitor.Linux.UI
         private void OnNetworkUpdated(LinuxNetworkData data)
         {
             _lastNet = data;
+            var i18n = I18n.Current;
+
             if (_tbNetRates != null)
                 _tbNetRates.Text = $"{data.DownSpeedStr}   {data.UpSpeedStr}";
 
             if (_tbPublicIp != null)
-                _tbPublicIp.Text = string.IsNullOrEmpty(data.PublicIp) ? "获取中..." : data.PublicIp;
+                _tbPublicIp.Text = string.IsNullOrEmpty(data.PublicIp) ? i18n.NetFetching : data.PublicIp;
 
             if (_tbFlagEmoji != null)
                 _tbFlagEmoji.Text = LinuxTelemetryEngine.CountryCodeToEmoji(data.CountryCode);
@@ -508,6 +698,7 @@ namespace SysMonitor.Linux.UI
         {
             _lastZt = data;
             var theme = LinuxTheme.Current;
+            var i18n = I18n.Current;
 
             if (_elZtDot != null && _tbZtTitle != null && _tbZtStatus != null && _tbZtSub != null)
             {
@@ -515,7 +706,7 @@ namespace SysMonitor.Linux.UI
                 {
                     _elZtDot.Background = theme.TextMuted;
                     _tbZtTitle.Text = "ZeroTier";
-                    _tbZtStatus.Text = "未运行";
+                    _tbZtStatus.Text = i18n.ZtOffline;
                     _tbZtStatus.Foreground = theme.TextMuted;
                     _tbZtSub.Text = !string.IsNullOrEmpty(data.LocalNodeId) ? ("Node: " + data.LocalNodeId) : "ZeroTier Mesh";
                 }
@@ -523,7 +714,7 @@ namespace SysMonitor.Linux.UI
                 {
                     _elZtDot.Background = theme.AccentRed;
                     _tbZtTitle.Text = "Moon";
-                    _tbZtStatus.Text = "掉线";
+                    _tbZtStatus.Text = i18n.Dropped;
                     _tbZtStatus.Foreground = theme.AccentRed;
                     _tbZtSub.Text = "Node: " + data.LocalNodeId;
                 }
@@ -536,12 +727,12 @@ namespace SysMonitor.Linux.UI
                     if (data.TotalMoons > 0)
                     {
                         _tbZtTitle.Text = $"Moon {data.DirectMoons}/{data.TotalMoons}";
-                        _tbZtStatus.Text = isDirect ? $"直连 {data.MinLatency}ms" : "中继";
+                        _tbZtStatus.Text = isDirect ? $"{i18n.Direct} {data.MinLatency}ms" : i18n.Relay;
                     }
                     else
                     {
                         _tbZtTitle.Text = "ZeroTier";
-                        _tbZtStatus.Text = "已连入";
+                        _tbZtStatus.Text = i18n.ZtOnline;
                     }
 
                     _tbZtSub.Text = !string.IsNullOrEmpty(data.LocalNodeId) ? ("Node: " + data.LocalNodeId) : "ZeroTier Mesh";

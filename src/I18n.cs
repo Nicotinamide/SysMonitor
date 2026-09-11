@@ -483,6 +483,7 @@ namespace SysMonitor
 
     public static class I18n
     {
+        public static event Action LanguageChanged;
         private static TranslationSet _current = TranslationSet.CreateZh();
 
         public static TranslationSet Current
@@ -498,6 +499,7 @@ namespace SysMonitor
         public static void SetLanguage(AppLanguage lang)
         {
             _current = lang == AppLanguage.En ? TranslationSet.CreateEn() : TranslationSet.CreateZh();
+            if (LanguageChanged != null) LanguageChanged();
         }
     }
 }

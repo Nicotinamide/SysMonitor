@@ -37,6 +37,7 @@
   <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
     <Compile Include="src/Linux/**/*.cs" />
     <Compile Include="src/UpdateChecker.cs" />
+    <Compile Include="src/I18n.cs" />
     <PackageReference Include="Avalonia" Version="11.0.10" />
     <PackageReference Include="Avalonia.Desktop" Version="11.0.10" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.10" />
