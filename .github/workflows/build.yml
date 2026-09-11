@@ -13,10 +13,10 @@ permissions:
 
 jobs:
   # ==========================================
-  # 1. Linux x86_64 原生构建 (Native AOT / SingleFile)
+  # 1. Linux x86_64 原生单文件构建 (Avalonia Desktop UI + CLI)
   # ==========================================
   build-linux-x64:
-    name: Build Linux x86_64 (Native AOT)
+    name: Build Linux x86_64 (Single-File)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -25,21 +25,15 @@ jobs:
       - name: Install Native Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang zlib1g-dev libkrb5-dev
+          sudo apt-get install -y build-essential clang zlib1g-dev libkrb5-dev libfontconfig1-dev libx11-dev libice-dev libsm-dev
 
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish Linux x64 Binary
+      - name: Publish Linux x64 Single-File
         run: |
-          dotnet publish SysMonitor.csproj \
-            -r linux-x64 \
-            -c Release \
-            -p:PublishAot=true \
-            -p:StripSymbols=true \
-            -o ./dist/linux-x64 || \
           dotnet publish SysMonitor.csproj \
             -r linux-x64 \
             -c Release \

@@ -281,6 +281,9 @@ namespace SysMonitor.Linux
                     var peerResp = await client.GetStringAsync("http://127.0.0.1:9993/peer");
                     if (!string.IsNullOrEmpty(peerResp))
                     {
+                        var peerMatches = Regex.Matches(peerResp, "\"address\"\\s*:\\s*\"([^\"]+)\"");
+                        snapshot.PeerCount = peerMatches.Count;
+
                         // 寻找 role == "MOON" 的节点
                         var moonMatches = Regex.Matches(peerResp, "\"role\"\\s*:\\s*\"MOON\"[^}]*\"latency\"\\s*:\\s*(-?\\d+)");
                         snapshot.MoonCount = moonMatches.Count;
@@ -375,6 +378,8 @@ namespace SysMonitor.Linux
         public int TotalMB { get; set; }
         public int UsedMB { get; set; }
         public int UsagePercent { get; set; }
+        public double UsedGB => Math.Round(UsedMB / 1024.0, 1);
+        public double TotalGB => Math.Round(TotalMB / 1024.0, 1);
     }
 
     public class NetworkRateSnapshot
@@ -387,6 +392,7 @@ namespace SysMonitor.Linux
     {
         public bool IsRunning { get; set; }
         public string NodeId { get; set; }
+        public int PeerCount { get; set; }
         public int MoonCount { get; set; }
         public int MinMoonLatency { get; set; } = -1;
     }

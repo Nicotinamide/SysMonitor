@@ -19,20 +19,27 @@
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
   </PropertyGroup>
 
-  <!-- Linux x64 默认使用 Native AOT -->
+  <!-- Linux x64 发布配置: 独立单文件发布 -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
-    <PublishAot Condition="'$(PublishAot)' == ''">true</PublishAot>
+    <PublishAot>false</PublishAot>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
-  <!-- Linux ARM64 跨架构编译使用 SingleFile 自包含 -->
+  <!-- Linux ARM64 发布配置: 独立单文件发布 -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">
     <PublishAot>false</PublishAot>
     <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
-  <!-- Linux 平台：仅编译 Linux 原生引擎，完全隔离 Windows WPF 专有代码 -->
+  <!-- Linux 平台：编译 Linux 原生引擎及 Avalonia UI，完全隔离 Windows WPF 专有代码 -->
   <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
-    <Compile Include="src/Linux/*.cs" />
+    <Compile Include="src/Linux/**/*.cs" />
+    <PackageReference Include="Avalonia" Version="11.0.10" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.0.10" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.10" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.0.10" />
   </ItemGroup>
 
   <!-- Windows 平台：编译 Windows 源码 -->
