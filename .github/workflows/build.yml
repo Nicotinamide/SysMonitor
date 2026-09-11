@@ -98,10 +98,40 @@ jobs:
           path: sysmonitor-linux-arm64.tar.gz
 
   # ==========================================
-  # 3. Windows x64 构建 (Unified Avalonia Desktop UI)
+  # 3. Windows 原生极轻量版构建 (Native WPF ~480KB)
   # ==========================================
-  build-windows-x64:
-    name: Build Windows x64 (Avalonia Single-File)
+  build-windows-wpf:
+    name: Build Windows Native WPF (480KB)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Compile Native WPF SysMonitor.exe
+        shell: cmd
+        run: |
+          set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
+          set WPF=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF
+          "%CSC%" /codepage:65001 /target:winexe /optimize+ /win32icon:app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Xaml.dll /r:System.Web.Extensions.dll /r:System.Security.dll /r:"%WPF%\WindowsBase.dll" /r:"%WPF%\PresentationCore.dll" /r:"%WPF%\PresentationFramework.dll" /out:SysMonitor.exe src\*.cs
+
+      - name: Package Native WPF Release Bundle
+        shell: pwsh
+        run: |
+          Compress-Archive -Path SysMonitor.exe, app.ico, README.md -DestinationPath sysmonitor-windows-wpf.zip
+
+      - name: Upload Windows WPF Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysmonitor-windows-wpf
+          path: |
+            SysMonitor.exe
+            sysmonitor-windows-wpf.zip
+
+  # ==========================================
+  # 4. Windows 现代跨平台版构建 (Avalonia Desktop)
+  # ==========================================
+  build-windows-avalonia:
+    name: Build Windows Avalonia (Modern Cross-Platform)
     runs-on: windows-latest
     steps:
       - name: Checkout Code
@@ -112,7 +142,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish Windows x64 Single-File
+      - name: Publish Windows Avalonia Single-File
         shell: pwsh
         run: |
           dotnet publish SysMonitor.csproj `
@@ -122,27 +152,25 @@ jobs:
             -p:PublishSingleFile=true `
             --self-contained true `
             -o ./dist/win-x64
-          Copy-Item ./dist/win-x64/sysmonitor.exe ./SysMonitor.exe
+          Copy-Item ./dist/win-x64/sysmonitor.exe ./sysmonitor-avalonia.exe
 
-      - name: Compress Windows Release Bundle
+      - name: Compress Avalonia Release Bundle
         shell: pwsh
         run: |
-          Compress-Archive -Path SysMonitor.exe, app.ico, README.md -DestinationPath sysmonitor-windows-x64.zip
+          Compress-Archive -Path sysmonitor-avalonia.exe, app.ico, README.md -DestinationPath sysmonitor-windows-avalonia-x64.zip
 
-      - name: Upload Windows x64 Artifact
+      - name: Upload Windows Avalonia Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sysmonitor-windows-x64
-          path: |
-            SysMonitor.exe
-            sysmonitor-windows-x64.zip
+          name: sysmonitor-windows-avalonia
+          path: sysmonitor-windows-avalonia-x64.zip
 
   # ==========================================
-  # 4. 发布 GitHub Release (在 Tag 或 Release 时触发)
+  # 5. 发布 GitHub Release (在 Tag 或 Release 时触发)
   # ==========================================
   create-release:
     name: Publish Release Assets
-    needs: [build-linux-x64, build-linux-arm64, build-windows-x64]
+    needs: [build-linux-x64, build-linux-arm64, build-windows-wpf, build-windows-avalonia]
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
@@ -157,9 +185,10 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
+            sysmonitor-windows-wpf/SysMonitor.exe
+            sysmonitor-windows-wpf/sysmonitor-windows-wpf.zip
+            sysmonitor-windows-avalonia/sysmonitor-windows-avalonia-x64.zip
             sysmonitor-linux-x64/sysmonitor-linux-x64.tar.gz
             sysmonitor-linux-arm64/sysmonitor-linux-arm64.tar.gz
-            sysmonitor-windows-x64/sysmonitor-windows-x64.zip
-            sysmonitor-windows-x64/SysMonitor.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

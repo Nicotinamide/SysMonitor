@@ -36,14 +36,14 @@
 
 ---
 
-## 💻 平台与架构支持
+## 💻 平台与架构支持（双轨发布策略）
 
-| 操作系统 | 架构 | 编译模式 | 运行依赖 | 状态 |
+| 版本形态 | 目标系统与架构 | 体积与特性 | 运行依赖 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Linux (Arch Linux)** | `x86_64` | Native AOT (ELF) | 零依赖 (glibc / X11) | ✅ CI/CD 全自动构建 |
-| **Linux (Ubuntu / Debian)** | `x86_64` | Native AOT (ELF) | 零依赖 (glibc / X11) | ✅ CI/CD 全自动构建 |
-| **Linux (ARM64 / aarch64)** | `aarch64` | Native AOT (ELF) | 零依赖 (树莓派/香橙派/ARM服务器) | ✅ CI/CD 全自动构建 |
-| **Windows 10 / 11** | `x64` | Native (EXE) | 内置 .NET 4.8 / 零安装 | ✅ 绿色单文件 |
+| **Windows 原生极简版 (Native WPF)** | Windows 10 / 11 (x64) | **~480 KB** 绿色单文件，毫秒级秒开，内存 <30MB | 零依赖 (内置 .NET 4.0~4.8) | ✅ CI/CD 自动构建 (推荐日常使用) |
+| **Windows 现代跨平台版 (Avalonia)** | Windows 10 / 11 (x64) | 统一跨平台界面引擎 | 零依赖 (内置独立运行环境) | ✅ CI/CD 自动构建 |
+| **Linux 原生单文件版 (Avalonia x64)** | Linux x86_64 (Arch / Ubuntu / Debian) | 跨平台桌面遥测单文件 | 零依赖 (X11 / Wayland) | ✅ CI/CD 自动构建 |
+| **Linux ARM64 单文件版 (Avalonia arm64)**| Linux ARM64 (树莓派 / 香橙派 / ARM服务器) | 跨平台桌面遥测单文件 | 零依赖 (X11 / Wayland) | ✅ CI/CD 自动构建 |
 
 ---
 
@@ -51,21 +51,27 @@
 
 ### 1. 从 GitHub Releases / Artifacts 直接下载
 
-在 GitHub [Actions](../../actions) 或 [Releases](../../releases) 页面直接下载对应架构的压缩包：
+在 GitHub [Releases](../../releases) 或 [Actions](../../actions) 页面根据需求直接下载对应版本：
 
-- **Linux x86_64**：下载 `sysmonitor-linux-x64.tar.gz`，解压即用：
-  ```bash
-  tar -zxvf sysmonitor-linux-x64.tar.gz
-  chmod +x sysmonitor
-  ./sysmonitor
-  ```
-- **Linux ARM64**：下载 `sysmonitor-linux-arm64.tar.gz`，解压即用：
-  ```bash
-  tar -zxvf sysmonitor-linux-arm64.tar.gz
-  chmod +x sysmonitor
-  ./sysmonitor
-  ```
-- **Windows x64**：下载 `sysmonitor-windows-x64.zip`，解压后双击 `SysMonitor.exe` 即可直接运行。
+- **Windows 用户推荐（原生极轻量 480KB 版）**：
+  - 直接下载 **`SysMonitor.exe`**（仅 **480 KB** 绿色单文件），直接双击运行，无须解压或安装！
+  - 亦可下载 `sysmonitor-windows-wpf.zip`。
+- **Windows 用户（Avalonia 现代跨平台版）**：
+  - 下载 `sysmonitor-windows-avalonia-x64.zip`。
+- **Linux x86_64 用户**：
+  - 下载 `sysmonitor-linux-x64.tar.gz`，解压即用：
+    ```bash
+    tar -zxvf sysmonitor-linux-x64.tar.gz
+    chmod +x sysmonitor
+    ./sysmonitor
+    ```
+- **Linux ARM64 (aarch64) 用户**：
+  - 下载 `sysmonitor-linux-arm64.tar.gz`，解压即用：
+    ```bash
+    tar -zxvf sysmonitor-linux-arm64.tar.gz
+    chmod +x sysmonitor
+    ./sysmonitor
+    ```
 
 ---
 
