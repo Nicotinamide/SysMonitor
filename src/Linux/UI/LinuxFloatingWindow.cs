@@ -40,6 +40,7 @@ namespace SysMonitor.Linux.UI
 
         // Drag & Click tracking (1:1 with Windows)
         private Point _pointerDownPos;
+        private PointerPressedEventArgs _pointerPressedArgs;
         private bool _isDragging = false;
 
         private DispatcherTimer _timer;
@@ -458,6 +459,7 @@ namespace SysMonitor.Linux.UI
         {
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             {
+                _pointerPressedArgs = e;
                 _pointerDownPos = e.GetPosition(this);
                 _isDragging = false;
                 e.Pointer.Capture(this);
@@ -477,7 +479,10 @@ namespace SysMonitor.Linux.UI
                     {
                         _detailWindow.Hide();
                     }
-                    BeginMoveDrag(e);
+                    if (_pointerPressedArgs != null)
+                    {
+                        BeginMoveDrag(_pointerPressedArgs);
+                    }
                 }
             }
         }
@@ -494,6 +499,7 @@ namespace SysMonitor.Linux.UI
                 ToggleDetailWindow();
             }
             _isDragging = false;
+            _pointerPressedArgs = null;
         }
 
         public void ToggleDetailWindow()
