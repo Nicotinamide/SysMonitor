@@ -1285,7 +1285,16 @@ namespace SysMonitor
 
                         if (_btnPullUpdate != null)
                         {
-                            _btnPullUpdate.Content = "⬇ " + i18n.DownloadUpdate;
+                            Border b = _btnPullUpdate.Content as Border;
+                            TextBlock t = b != null ? b.Child as TextBlock : null;
+                            if (t != null)
+                            {
+                                t.Text = "⬇ " + i18n.DownloadUpdate;
+                            }
+                            else
+                            {
+                                _btnPullUpdate.Content = "⬇ " + i18n.DownloadUpdate;
+                            }
                             _btnPullUpdate.ToolTip = string.Format("{0} ({1})", i18n.DownloadUpdate, info.LatestVersion);
                             _btnPullUpdate.Visibility = Visibility.Visible;
                         }
@@ -2420,46 +2429,41 @@ namespace SysMonitor
 
         private Button CreateSmallActionButton(string content, SolidColorBrush fg, Brush bg, Brush border, RoutedEventHandler onClick)
         {
-            Button btn = new Button
+            Border pill = new Border
             {
-                Content = content,
-                FontSize = 10,
-                Foreground = fg,
                 Background = bg,
                 BorderBrush = border,
                 BorderThickness = new Thickness(0.8),
-                Height = 22,
-                Padding = new Thickness(8, 0, 8, 0),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(8, 2.5, 8, 2.5),
+                SnapsToDevicePixels = true
+            };
+
+            TextBlock tb = new TextBlock
+            {
+                Text = content,
+                FontSize = 10,
+                Foreground = fg,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            pill.Child = tb;
+
+            Button btn = new Button
+            {
+                Content = pill,
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center,
                 Cursor = Cursors.Hand,
                 FocusVisualStyle = null
             };
 
-            string xaml = @"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
-                                             TargetType='Button'>
-                <Border x:Name='Bd' Background='{TemplateBinding Background}' 
-                        BorderBrush='{TemplateBinding BorderBrush}' 
-                        BorderThickness='{TemplateBinding BorderThickness}' 
-                        CornerRadius='4' 
-                        Padding='{TemplateBinding Padding}'
-                        SnapsToDevicePixels='True'>
-                    <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/>
-                </Border>
-                <ControlTemplate.Triggers>
-                    <Trigger Property='IsMouseOver' Value='True'>
-                        <Setter Property='Opacity' Value='0.85'/>
-                    </Trigger>
-                    <Trigger Property='IsPressed' Value='True'>
-                        <Setter Property='Opacity' Value='0.65'/>
-                    </Trigger>
-                    <Trigger Property='IsEnabled' Value='False'>
-                        <Setter Property='Opacity' Value='0.4'/>
-                    </Trigger>
-                </ControlTemplate.Triggers>
-            </ControlTemplate>";
-
+            string xaml = @"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' TargetType='Button'><ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/></ControlTemplate>";
             btn.Template = (ControlTemplate)XamlReader.Parse(xaml);
+
+            btn.MouseEnter += delegate { pill.Opacity = 0.8; };
+            btn.MouseLeave += delegate { pill.Opacity = 1.0; };
+
             if (onClick != null) btn.Click += onClick;
             return btn;
         }
