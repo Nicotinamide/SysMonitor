@@ -780,75 +780,7 @@ namespace SysMonitor.Linux.UI
             sp.Children.Add(prefGrid);
 
             // Section: 首页微件模块定制 (Widget Modules Customization)
-            var modHeaderGrid = new Grid { Margin = new Thickness(0, 4, 0, 2) };
-            modHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            modHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-
-            var lblModHead = LinuxTheme.CreateMutedText("❖ " + i18n.SettingsModulesTitle);
-            lblModHead.FontWeight = FontWeight.Bold;
-            Grid.SetColumn(lblModHead, 0);
-            modHeaderGrid.Children.Add(lblModHead);
-
-            var lblHint = new TextBlock
-            {
-                Text = i18n.Lang == AppLanguage.Zh ? "单击启闭模块" : "Click to toggle modules",
-                FontSize = 9.5,
-                Foreground = theme.TextDim,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(lblHint, 1);
-            modHeaderGrid.Children.Add(lblHint);
-            sp.Children.Add(modHeaderGrid);
-
-            var modBox = LinuxTheme.CreateInnerBorder();
-            modBox.Padding = new Thickness(4, 4, 4, 4);
-            modBox.Margin = new Thickness(0, 0, 0, 4);
-
-            var modGrid = new Grid();
-            for (int i = 0; i < 4; i++) modGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-
-            string[] modKeys = new[] { LinuxSettings.ModulePower, LinuxSettings.ModuleNetwork, LinuxSettings.ModuleZeroTier, LinuxSettings.ModuleCompute };
-            string[] modTitles = new[] {
-                i18n.Lang == AppLanguage.Zh ? "⚡ 供电" : "⚡ Power",
-                i18n.Lang == AppLanguage.Zh ? "🌐 网卡" : "🌐 Net",
-                i18n.Lang == AppLanguage.Zh ? "🔗 互联" : "🔗 ZT",
-                i18n.Lang == AppLanguage.Zh ? "💻 算力" : "💻 CPU"
-            };
-
-            for (int i = 0; i < 4; i++)
-            {
-                string key = modKeys[i];
-                string title = modTitles[i];
-                bool isAct = LinuxSettings.IsModuleEnabled(key);
-
-                var chip = new Button
-                {
-                    Content = title,
-                    FontSize = 10,
-                    FontWeight = isAct ? FontWeight.SemiBold : FontWeight.Normal,
-                    Foreground = isAct ? theme.TextPrimary : theme.TextDim,
-                    Background = isAct ? (theme.IsDark ? new SolidColorBrush(Color.FromArgb(50, 88, 166, 255)) : new SolidColorBrush(Color.FromArgb(40, 9, 105, 218))) : Brushes.Transparent,
-                    BorderBrush = isAct ? theme.AccentBlue : theme.BorderMuted,
-                    BorderThickness = new Thickness(0.8),
-                    CornerRadius = new CornerRadius(5),
-                    Padding = new Thickness(2, 3),
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    Margin = new Thickness(i == 0 ? 0 : 2, 0, i == 3 ? 0 : 2, 0),
-                    Cursor = new Cursor(StandardCursorType.Hand)
-                };
-                chip.Click += (s, e) =>
-                {
-                    if (!LinuxSettings.ToggleModule(key))
-                    {
-                        ShowToast(i18n.AtLeastOneModule);
-                    }
-                };
-                Grid.SetColumn(chip, i);
-                modGrid.Children.Add(chip);
-            }
-            modBox.Child = modGrid;
-            sp.Children.Add(modBox);
+            BuildModulesSection(sp, theme, i18n);
 
             // ZeroTier Controller Settings
             var cfg = _memberDir?.CurrentConfig ?? new LinuxMemberConfig();
@@ -856,7 +788,7 @@ namespace SysMonitor.Linux.UI
             _txtSettingUrl = LinuxTheme.CreateInputTextBox(string.IsNullOrEmpty(cfg.ControllerUrl) ? "https://api.zerotier.com" : cfg.ControllerUrl);
             sp.Children.Add(_txtSettingUrl);
 
-            var idTokenGrid = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+            var idTokenGrid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
             idTokenGrid.ColumnDefinitions.Add(new ColumnDefinition(135, GridUnitType.Pixel));
             idTokenGrid.ColumnDefinitions.Add(new ColumnDefinition(8, GridUnitType.Pixel));
             idTokenGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
@@ -877,6 +809,7 @@ namespace SysMonitor.Linux.UI
 
             _txtSettingToken = LinuxTheme.CreateInputTextBox(cfg.ApiToken);
             _txtSettingToken.PasswordChar = '●';
+            _txtSettingToken.Margin = new Thickness(0, 0, 4, 0);
             Grid.SetColumn(_txtSettingToken, 0);
             tokenRow.Children.Add(_txtSettingToken);
 
@@ -888,6 +821,8 @@ namespace SysMonitor.Linux.UI
                 _txtSettingToken.PasswordChar = isTokenMasked ? '●' : '\0';
                 btnEye.Content = isTokenMasked ? "👁" : "🙈";
             }, 11);
+            btnEye.VerticalAlignment = VerticalAlignment.Center;
+            btnEye.HorizontalAlignment = HorizontalAlignment.Center;
             Grid.SetColumn(btnEye, 1);
             tokenRow.Children.Add(btnEye);
 
@@ -1065,6 +1000,299 @@ namespace SysMonitor.Linux.UI
             sp.Children.Add(btnGrid);
             overlay.Child = sp;
             return overlay;
+        }
+
+        private void BuildModulesSection(StackPanel sfSp, LinuxThemePalette theme, TranslationSet i18n)
+        {
+            var headerGrid = new Grid { Margin = new Thickness(0, 4, 0, 4) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var lblModulesHeader = LinuxTheme.CreateMutedText("❖ " + i18n.SettingsModulesTitle);
+            lblModulesHeader.FontWeight = FontWeight.Bold;
+            Grid.SetColumn(lblModulesHeader, 0);
+            headerGrid.Children.Add(lblModulesHeader);
+
+            var lblHint = new TextBlock
+            {
+                Text = i18n.Lang == AppLanguage.Zh ? "拖动排序 · 单击/右击启闭" : "Drag to reorder · Click to toggle",
+                FontSize = 9.5,
+                Foreground = theme.TextDim,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(lblHint, 1);
+            headerGrid.Children.Add(lblHint);
+            sfSp.Children.Add(headerGrid);
+
+            var bModulesContainer = new Border
+            {
+                Background = theme.InnerTileBg,
+                BorderBrush = theme.BorderMuted,
+                BorderThickness = new Thickness(0.8),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(6, 4, 6, 4),
+                Margin = new Thickness(0, 0, 0, 8),
+                Height = 46
+            };
+
+            const double SlotWidth = 82.0;
+            var order = LinuxSettings.ModuleOrder;
+            double totalCanvasWidth = order.Count * SlotWidth;
+
+            var canvas = new Canvas
+            {
+                Width = totalCanvasWidth,
+                Height = 36,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                ClipToBounds = false
+            };
+            bModulesContainer.Child = canvas;
+            sfSp.Children.Add(bModulesContainer);
+
+            RenderModuleChips(canvas, theme, i18n);
+        }
+
+        private void RenderModuleChips(Canvas canvas, LinuxThemePalette theme, TranslationSet i18n)
+        {
+            canvas.Children.Clear();
+            var order = LinuxSettings.ModuleOrder;
+            var enabled = LinuxSettings.ModuleEnabled;
+
+            const double SlotWidth = 82.0;
+            const double ChipWidth = 76.0;
+            const double ChipHeight = 36.0;
+            int totalSlots = order.Count;
+            double slotPadding = (SlotWidth - ChipWidth) / 2.0;
+
+            var chipMap = new Dictionary<string, Border>();
+
+            for (int i = 0; i < order.Count; i++)
+            {
+                int slotIndex = i;
+                string key = order[slotIndex];
+                bool isAct = enabled.Contains(key);
+
+                string icon = "⚡";
+                string name = (i18n.Lang == AppLanguage.Zh) ? "供电" : "Power";
+                string fullTitle = i18n.ModPowerTitle;
+                Color col = ((SolidColorBrush)theme.AccentAmber).Color;
+
+                if (key == LinuxSettings.ModulePower)
+                {
+                    icon = "⚡";
+                    name = (i18n.Lang == AppLanguage.Zh) ? "供电" : "Power";
+                    fullTitle = i18n.ModPowerTitle;
+                    col = ((SolidColorBrush)theme.AccentAmber).Color;
+                }
+                else if (key == LinuxSettings.ModuleNetwork)
+                {
+                    icon = "🌐";
+                    name = (i18n.Lang == AppLanguage.Zh) ? "网卡" : "Net";
+                    fullTitle = i18n.ModNetTitle;
+                    col = ((SolidColorBrush)theme.AccentBlue).Color;
+                }
+                else if (key == LinuxSettings.ModuleZeroTier)
+                {
+                    icon = "🔗";
+                    name = (i18n.Lang == AppLanguage.Zh) ? "互联" : "ZT";
+                    fullTitle = i18n.ModZtTitle;
+                    col = ((SolidColorBrush)theme.AccentEmerald).Color;
+                }
+                else if (key == LinuxSettings.ModuleCompute)
+                {
+                    icon = "💻";
+                    name = (i18n.Lang == AppLanguage.Zh) ? "算力" : "Load";
+                    fullTitle = i18n.ModComputeTitle;
+                    col = Color.FromRgb(168, 85, 247);
+                }
+
+                var chip = new Border
+                {
+                    Width = ChipWidth,
+                    Height = ChipHeight,
+                    CornerRadius = new CornerRadius(7),
+                    Cursor = new Cursor(StandardCursorType.Hand),
+                    Tag = key,
+                    RenderTransformOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative)
+                };
+                ToolTip.SetTip(chip, fullTitle + (i18n.Lang == AppLanguage.Zh ? "\n左键拖动调序 · 单击/右键启闭" : "\nDrag to reorder · Click/Right-click to toggle"));
+
+                if (isAct)
+                {
+                    chip.Background = new SolidColorBrush(Color.FromArgb(38, col.R, col.G, col.B));
+                    chip.BorderBrush = new SolidColorBrush(Color.FromArgb(160, col.R, col.G, col.B));
+                    chip.BorderThickness = new Thickness(1);
+                    chip.Opacity = 1.0;
+                }
+                else
+                {
+                    chip.Background = theme.CardBg;
+                    chip.BorderBrush = theme.BorderMuted;
+                    chip.BorderThickness = new Thickness(0.8);
+                    chip.Opacity = 0.5;
+                }
+
+                var sp = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                var tbIcon = new TextBlock
+                {
+                    Text = icon,
+                    FontSize = 12,
+                    Foreground = isAct ? new SolidColorBrush(col) : theme.TextDim,
+                    Margin = new Thickness(0, 0, 4, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                var tbText = new TextBlock
+                {
+                    Text = name,
+                    FontSize = 10.5,
+                    FontWeight = isAct ? FontWeight.SemiBold : FontWeight.Normal,
+                    Foreground = isAct ? new SolidColorBrush(col) : theme.TextDim,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                sp.Children.Add(tbIcon);
+                sp.Children.Add(tbText);
+                chip.Child = sp;
+
+                double initLeft = slotIndex * SlotWidth + slotPadding;
+                Canvas.SetLeft(chip, initLeft);
+                Canvas.SetTop(chip, 0);
+
+                chipMap[key] = chip;
+
+                Point dragStartMouse = new Point();
+                double chipStartLeft = 0;
+                bool isDragging = false;
+                bool isCaptured = false;
+
+                chip.PointerPressed += (s, e) =>
+                {
+                    var cp = e.GetCurrentPoint(canvas);
+                    if (cp.Properties.IsLeftButtonPressed)
+                    {
+                        dragStartMouse = cp.Position;
+                        chipStartLeft = Canvas.GetLeft(chip);
+                        isDragging = false;
+                        isCaptured = true;
+                        e.Pointer.Capture(chip);
+                        e.Handled = true;
+                    }
+                    else if (cp.Properties.IsRightButtonPressed)
+                    {
+                        ToggleModule(key, order, enabled, canvas, theme, i18n);
+                        e.Handled = true;
+                    }
+                };
+
+                chip.PointerMoved += (s, e) =>
+                {
+                    if (isCaptured)
+                    {
+                        var curMouse = e.GetCurrentPoint(canvas).Position;
+                        double deltaX = curMouse.X - dragStartMouse.X;
+
+                        if (!isDragging && Math.Abs(deltaX) > 4)
+                        {
+                            isDragging = true;
+                            chip.ZIndex = 999;
+                            chip.RenderTransform = new ScaleTransform(1.08, 1.08);
+                            chip.BoxShadow = BoxShadows.Parse(string.Format("0 3 14 #{0:X2}{1:X2}{2:X2}{3:X2}", (byte)(isAct ? 140 : 80), col.R, col.G, col.B));
+                        }
+
+                        if (isDragging)
+                        {
+                            double newLeft = chipStartLeft + deltaX;
+                            double minLeft = slotPadding;
+                            double maxLeft = (totalSlots - 1) * SlotWidth + slotPadding;
+                            if (newLeft < minLeft - 12) newLeft = minLeft - 12;
+                            if (newLeft > maxLeft + 12) newLeft = maxLeft + 12;
+
+                            Canvas.SetLeft(chip, newLeft);
+
+                            double chipCenter = newLeft + ChipWidth / 2.0;
+                            int targetSlot = (int)Math.Floor(chipCenter / SlotWidth);
+                            if (targetSlot < 0) targetSlot = 0;
+                            if (targetSlot >= totalSlots) targetSlot = totalSlots - 1;
+
+                            int currentSlot = order.IndexOf(key);
+                            if (targetSlot != currentSlot)
+                            {
+                                order.RemoveAt(currentSlot);
+                                order.Insert(targetSlot, key);
+
+                                for (int j = 0; j < order.Count; j++)
+                                {
+                                    string otherKey = order[j];
+                                    if (otherKey != key && chipMap.ContainsKey(otherKey))
+                                    {
+                                        Border otherChip = chipMap[otherKey];
+                                        double otherTargetLeft = j * SlotWidth + slotPadding;
+                                        Canvas.SetLeft(otherChip, otherTargetLeft);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                chip.PointerReleased += (s, e) =>
+                {
+                    if (isCaptured)
+                    {
+                        isCaptured = false;
+                        e.Pointer.Capture(null);
+
+                        if (isDragging)
+                        {
+                            chip.RenderTransform = new ScaleTransform(1.0, 1.0);
+                            chip.BoxShadow = new BoxShadows();
+                            chip.ZIndex = 0;
+
+                            int finalSlot = order.IndexOf(key);
+                            double finalLeft = finalSlot * SlotWidth + slotPadding;
+                            Canvas.SetLeft(chip, finalLeft);
+
+                            LinuxSettings.SetWidgetModules(order, enabled);
+                        }
+                        else
+                        {
+                            ToggleModule(key, order, enabled, canvas, theme, i18n);
+                        }
+                        isDragging = false;
+                        e.Handled = true;
+                    }
+                };
+
+                canvas.Children.Add(chip);
+            }
+        }
+
+        private void ToggleModule(string key, List<string> order, List<string> enabled, Canvas canvas, LinuxThemePalette theme, TranslationSet i18n)
+        {
+            if (enabled.Contains(key))
+            {
+                if (enabled.Count <= 1)
+                {
+                    ShowToast(i18n.AtLeastOneModule);
+                    return;
+                }
+                enabled.Remove(key);
+            }
+            else
+            {
+                enabled.Add(key);
+            }
+
+            LinuxSettings.SetWidgetModules(order, enabled);
+            RenderModuleChips(canvas, theme, i18n);
         }
 
         private void ToggleSettingsView()

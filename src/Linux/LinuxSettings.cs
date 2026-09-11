@@ -138,6 +138,14 @@ namespace SysMonitor.Linux
             SettingsChanged?.Invoke();
         }
 
+        public static void SetWidgetModules(List<string> order, List<string> enabled)
+        {
+            if (order != null && order.Count > 0) _moduleOrder = new List<string>(order);
+            if (enabled != null && enabled.Count > 0) _moduleEnabled = new List<string>(enabled);
+            Save();
+            SettingsChanged?.Invoke();
+        }
+
         public static bool ToggleModule(string key)
         {
             if (_moduleEnabled.Contains(key))
