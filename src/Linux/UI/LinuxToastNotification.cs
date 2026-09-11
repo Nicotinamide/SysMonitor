@@ -8,6 +8,14 @@ using Avalonia.Threading;
 
 namespace SysMonitor.Linux.UI
 {
+    public enum ToastType
+    {
+        Info,
+        Success,
+        Warning,
+        Error
+    }
+
     public class LinuxToastNotification : Window
     {
         private static LinuxToastNotification _activeToast;
@@ -50,12 +58,20 @@ namespace SysMonitor.Linux.UI
             var theme = LinuxTheme.Current;
 
             // Pick accent color
-            ISolidColorBrush accentBrush = theme.AccentBlue;
-            if (type == ToastType.Success) accentBrush = theme.AccentEmerald;
-            else if (type == ToastType.Warning) accentBrush = theme.AccentAmber;
-            else if (type == ToastType.Error) accentBrush = theme.AccentRed;
+            Color c = (theme.AccentBlue as ISolidColorBrush)?.Color ?? Color.FromRgb(88, 166, 255);
+            if (type == ToastType.Success)
+            {
+                c = (theme.AccentEmerald as ISolidColorBrush)?.Color ?? Color.FromRgb(16, 185, 129);
+            }
+            else if (type == ToastType.Warning)
+            {
+                c = (theme.AccentAmber as ISolidColorBrush)?.Color ?? Color.FromRgb(245, 158, 11);
+            }
+            else if (type == ToastType.Error)
+            {
+                c = (theme.AccentRed as ISolidColorBrush)?.Color ?? Color.FromRgb(248, 81, 73);
+            }
 
-            var c = accentBrush.Color;
             var borderHighlight = new SolidColorBrush(Color.FromArgb(
                 LinuxSettings.IsDark ? (byte)95 : (byte)130, c.R, c.G, c.B));
 
@@ -69,12 +85,7 @@ namespace SysMonitor.Linux.UI
                 Margin = new Thickness(8),
                 MinWidth = 200,
                 MaxWidth = 360,
-                BoxShadow = new BoxShadows(new BoxShadow
-                {
-                    Blur = 12,
-                    OffsetY = 3,
-                    Color = Color.FromArgb(60, 0, 0, 0)
-                })
+                BoxShadow = BoxShadows.Parse(theme.IsDark ? "0 4 16 #60000000" : "0 4 16 #30000000")
             };
 
             var grid = new Grid();
