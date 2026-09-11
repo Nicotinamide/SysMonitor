@@ -46,9 +46,76 @@ namespace SysMonitor.Linux
         public bool IsDischarging { get; set; } = false;
         public bool IsAcOnline { get; set; } = true;
         public LinuxPowerStateKind StateKind { get; set; } = LinuxPowerStateKind.ChargedFull;
-        public string StatusText { get; set; } = "已充满";
-        public string EstimatedTimeStr { get; set; } = "已充满";
+        public string StatusText { get; set; } = "";
+        public string EstimatedTimeStr { get; set; } = "--";
         public double BatteryWh { get; set; } = 0.0;
+        public double DischargingHours { get; set; } = 0.0;
+
+        public string GetStatusText(TranslationSet i18n)
+        {
+            switch (StateKind)
+            {
+                case LinuxPowerStateKind.DesktopAc:
+                    return i18n.PowerDesktop;
+                case LinuxPowerStateKind.ChargedFull:
+                    return i18n.PowerFull;
+                case LinuxPowerStateKind.ChargingFast:
+                    return string.Format(i18n.Lang == AppLanguage.Zh ? "⚡ 充电中 +{0:0.0}W" : "⚡ Charging +{0:0.0}W", Math.Abs(Watts));
+                case LinuxPowerStateKind.AcDirect:
+                    return i18n.PowerAcDirect;
+                case LinuxPowerStateKind.DischargingNormal:
+                    return string.Format(i18n.Lang == AppLanguage.Zh ? "电池供电 -{0:0.0}W" : "Battery -{0:0.0}W", Math.Abs(Watts));
+                case LinuxPowerStateKind.DischargingLow:
+                    return string.Format(i18n.Lang == AppLanguage.Zh ? "低电量 -{0:0.0}W" : "Low Battery -{0:0.0}W", Math.Abs(Watts));
+                default:
+                    return !string.IsNullOrEmpty(StatusText) ? StatusText : "--";
+            }
+        }
+
+        public string GetCompactStatusText(TranslationSet i18n)
+        {
+            switch (StateKind)
+            {
+                case LinuxPowerStateKind.DesktopAc:
+                    return i18n.Lang == AppLanguage.Zh ? "市电" : "AC";
+                case LinuxPowerStateKind.ChargedFull:
+                    return i18n.Lang == AppLanguage.Zh ? "满电" : "FULL";
+                case LinuxPowerStateKind.ChargingFast:
+                    return string.Format("+{0:0.0}W", Math.Abs(Watts));
+                case LinuxPowerStateKind.AcDirect:
+                    return i18n.Lang == AppLanguage.Zh ? "市电" : "AC";
+                case LinuxPowerStateKind.DischargingNormal:
+                case LinuxPowerStateKind.DischargingLow:
+                    return string.Format("-{0:0.0}W", Math.Abs(Watts));
+                default:
+                    return !string.IsNullOrEmpty(StatusText) ? StatusText : "--";
+            }
+        }
+
+        public string GetEstimatedTimeText(TranslationSet i18n)
+        {
+            switch (StateKind)
+            {
+                case LinuxPowerStateKind.DesktopAc:
+                case LinuxPowerStateKind.ChargedFull:
+                case LinuxPowerStateKind.AcDirect:
+                    return i18n.PowerNoBatteryDrain;
+                case LinuxPowerStateKind.ChargingFast:
+                    return i18n.PowerCharging;
+                case LinuxPowerStateKind.DischargingNormal:
+                case LinuxPowerStateKind.DischargingLow:
+                    if (DischargingHours > 0.05 && DischargingHours < 100)
+                    {
+                        int totalMin = (int)(DischargingHours * 60);
+                        int h = totalMin / 60;
+                        int m = totalMin % 60;
+                        return i18n.Lang == AppLanguage.Zh ? string.Format("{0}小时{1}分", h, m) : string.Format("{0}h {1}m", h, m);
+                    }
+                    return "--";
+                default:
+                    return "--";
+            }
+        }
     }
 
     public class LinuxNetworkData
@@ -140,8 +207,10 @@ namespace SysMonitor.Linux
 
         private string _cachedPublicIp = "";
         private string _cachedCountryCode = "";
-        private string _cachedCountry = "";
-        private string _cachedCity = "";
+        private string _cachedCountryZh = "";
+        private string _cachedCityZh = "";
+        private string _cachedCountryEn = "";
+        private string _cachedCityEn = "";
         private string _cachedIsp = "";
         private DateTime _lastGeoIpFetch = DateTime.MinValue;
 
@@ -151,6 +220,15 @@ namespace SysMonitor.Linux
         public LinuxTelemetryEngine()
         {
             _timer = new Timer(OnTimerTick, null, 0, 1000);
+            LinuxSettings.SettingsChanged += () =>
+            {
+                bool needFetch = (LinuxSettings.Language == AppLanguage.En && (string.IsNullOrEmpty(_cachedCityEn) || string.IsNullOrEmpty(_cachedCountryEn))) ||
+                                 (LinuxSettings.Language == AppLanguage.Zh && (string.IsNullOrEmpty(_cachedCityZh) || string.IsNullOrEmpty(_cachedCountryZh)));
+                if (needFetch && !string.IsNullOrEmpty(_cachedPublicIp))
+                {
+                    TriggerGeoIpRefresh();
+                }
+            };
             Task.Run(() => FetchGeoIpAsync());
         }
 
@@ -321,27 +399,26 @@ namespace SysMonitor.Linux
                         if (full)
                         {
                             p.StateKind = LinuxPowerStateKind.ChargedFull;
-                            p.StatusText = "已充满";
-                            p.EstimatedTimeStr = "已充满";
                         }
                         else if (charging)
                         {
                             p.StateKind = LinuxPowerStateKind.ChargingFast;
-                            p.StatusText = "正在充电";
-                            p.EstimatedTimeStr = "充电中";
                         }
                         else if (p.IsAcOnline)
                         {
                             p.StateKind = LinuxPowerStateKind.AcDirect;
-                            p.StatusText = "市电供电";
-                            p.EstimatedTimeStr = "市电直通";
                         }
                         else
                         {
                             p.StateKind = p.BatteryPercent <= 20 ? LinuxPowerStateKind.DischargingLow : LinuxPowerStateKind.DischargingNormal;
-                            p.StatusText = "电池供电";
-                            p.EstimatedTimeStr = rateWatts > 0 && p.BatteryWh > 0 ? string.Format("{0:0.0}小时", p.BatteryWh / rateWatts) : "--";
+                            if (rateWatts > 0 && p.BatteryWh > 0)
+                            {
+                                p.DischargingHours = p.BatteryWh / rateWatts;
+                            }
                         }
+
+                        p.StatusText = p.GetStatusText(I18n.Current);
+                        p.EstimatedTimeStr = p.GetEstimatedTimeText(I18n.Current);
                     }
                 }
 
@@ -350,10 +427,10 @@ namespace SysMonitor.Linux
                     p.HasBattery = false;
                     p.IsAcOnline = true;
                     p.StateKind = LinuxPowerStateKind.DesktopAc;
-                    p.StatusText = "市电供电";
-                    p.EstimatedTimeStr = "台式无电池";
                     p.BatteryPercent = 100;
                     p.CpuWatts = EstimateSystemPower(0, true);
+                    p.StatusText = p.GetStatusText(I18n.Current);
+                    p.EstimatedTimeStr = p.GetEstimatedTimeText(I18n.Current);
                 }
 
                 PowerUpdated?.Invoke(p);
@@ -439,10 +516,13 @@ namespace SysMonitor.Linux
                 net.LinkSpeedStr = GetInterfaceSpeed(net.ActiveInterface);
 
                 // GeoIP
-                net.PublicIp = !string.IsNullOrEmpty(_cachedPublicIp) ? _cachedPublicIp : "获取中...";
+                net.PublicIp = !string.IsNullOrEmpty(_cachedPublicIp) ? _cachedPublicIp : I18n.Current.NetFetching;
                 net.CountryCode = _cachedCountryCode;
-                net.Country = _cachedCountry;
-                net.City = _cachedCity;
+                bool isEn = LinuxSettings.Language == AppLanguage.En;
+                net.Country = isEn ? (!string.IsNullOrEmpty(_cachedCountryEn) ? _cachedCountryEn : _cachedCountryZh)
+                                   : (!string.IsNullOrEmpty(_cachedCountryZh) ? _cachedCountryZh : _cachedCountryEn);
+                net.City = isEn ? (!string.IsNullOrEmpty(_cachedCityEn) ? _cachedCityEn : _cachedCityZh)
+                                : (!string.IsNullOrEmpty(_cachedCityZh) ? _cachedCityZh : _cachedCityEn);
                 net.Isp = _cachedIsp;
 
                 NetworkUpdated?.Invoke(net);
@@ -515,15 +595,20 @@ namespace SysMonitor.Linux
 
         private async Task FetchGeoIpAsync()
         {
-            if ((DateTime.UtcNow - _lastGeoIpFetch).TotalMinutes < 15 && !string.IsNullOrEmpty(_cachedPublicIp))
+            bool isEn = LinuxSettings.Language == AppLanguage.En;
+            bool hasCurrentLang = isEn ? (!string.IsNullOrEmpty(_cachedCountryEn) && !string.IsNullOrEmpty(_cachedCityEn))
+                                       : (!string.IsNullOrEmpty(_cachedCountryZh) && !string.IsNullOrEmpty(_cachedCityZh));
+
+            if ((DateTime.UtcNow - _lastGeoIpFetch).TotalMinutes < 15 && !string.IsNullOrEmpty(_cachedPublicIp) && hasCurrentLang)
                 return;
 
             try
             {
                 _lastGeoIpFetch = DateTime.UtcNow;
+                string queryLang = isEn ? "en" : "zh-CN";
                 using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
                 {
-                    string json = await client.GetStringAsync("http://ip-api.com/json/?lang=zh-CN");
+                    string json = await client.GetStringAsync($"http://ip-api.com/json/?lang={queryLang}");
                     using (var doc = JsonDocument.Parse(json))
                     {
                         var root = doc.RootElement;
@@ -531,8 +616,18 @@ namespace SysMonitor.Linux
                         {
                             if (root.TryGetProperty("query", out var q)) _cachedPublicIp = q.GetString();
                             if (root.TryGetProperty("countryCode", out var cc)) _cachedCountryCode = cc.GetString();
-                            if (root.TryGetProperty("country", out var c)) _cachedCountry = c.GetString();
-                            if (root.TryGetProperty("city", out var ci)) _cachedCity = ci.GetString();
+                            string country = root.TryGetProperty("country", out var c) ? c.GetString() : "";
+                            string city = root.TryGetProperty("city", out var ci) ? ci.GetString() : "";
+                            if (isEn)
+                            {
+                                _cachedCountryEn = country;
+                                _cachedCityEn = city;
+                            }
+                            else
+                            {
+                                _cachedCountryZh = country;
+                                _cachedCityZh = city;
+                            }
                             if (root.TryGetProperty("isp", out var isp)) _cachedIsp = isp.GetString();
                         }
                     }

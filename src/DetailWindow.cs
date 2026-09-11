@@ -2071,7 +2071,10 @@ namespace SysMonitor
 
                 string geo = "";
                 if (!string.IsNullOrEmpty(data.Country)) geo += data.Country;
-                if (!string.IsNullOrEmpty(data.City)) geo += (geo.Length > 0 ? " · " : "") + data.City;
+                if (!string.IsNullOrEmpty(data.City) && !string.Equals(data.Country, data.City, StringComparison.OrdinalIgnoreCase))
+                {
+                    geo += (geo.Length > 0 ? " · " : "") + data.City;
+                }
                 if (!string.IsNullOrEmpty(data.Isp)) geo += (geo.Length > 0 ? " · " : "") + data.Isp;
                 _tbNetGeoIsp.Text = string.IsNullOrEmpty(geo) ? I18n.Current.NetFetching : geo;
             }));

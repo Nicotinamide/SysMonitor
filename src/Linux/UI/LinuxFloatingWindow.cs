@@ -42,6 +42,8 @@ namespace SysMonitor.Linux.UI
         private Border _bComputeTile;
         private TextBlock _tbComputeCpuVal;
         private TextBlock _tbComputeRamVal;
+        private Border _pComputeCpuTrack;
+        private Border _pComputeRamTrack;
         private Border _rectComputeCpuBar;
         private Border _rectComputeRamBar;
 
@@ -224,6 +226,14 @@ namespace SysMonitor.Linux.UI
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             _pBatteryTrack.Child = _rectBatteryFill;
+            _pBatteryTrack.SizeChanged += (s, e) =>
+            {
+                if (_lastPower != null && e.NewSize.Width > 0)
+                {
+                    double fillW = Math.Max(2, Math.Min(e.NewSize.Width, (_lastPower.BatteryPercent / 100.0) * e.NewSize.Width));
+                    _rectBatteryFill.Width = fillW;
+                }
+            };
             Grid.SetRow(_pBatteryTrack, 2);
             Grid.SetColumn(_pBatteryTrack, 0);
             grid.Children.Add(_pBatteryTrack);
@@ -421,7 +431,7 @@ namespace SysMonitor.Linux.UI
             barGrid.ColumnDefinitions.Add(new ColumnDefinition(6, GridUnitType.Pixel));
             barGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
 
-            var trackCpu = new Border
+            _pComputeCpuTrack = new Border
             {
                 Background = theme.ProgressBarTrack,
                 CornerRadius = new CornerRadius(1.75),
@@ -436,11 +446,18 @@ namespace SysMonitor.Linux.UI
                 Width = 2,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
-            trackCpu.Child = _rectComputeCpuBar;
-            Grid.SetColumn(trackCpu, 0);
-            barGrid.Children.Add(trackCpu);
+            _pComputeCpuTrack.Child = _rectComputeCpuBar;
+            _pComputeCpuTrack.SizeChanged += (s, e) =>
+            {
+                if (_lastLoad != null && e.NewSize.Width > 0)
+                {
+                    _rectComputeCpuBar.Width = Math.Max(2, Math.Min(e.NewSize.Width, (_lastLoad.CpuPercent / 100.0) * e.NewSize.Width));
+                }
+            };
+            Grid.SetColumn(_pComputeCpuTrack, 0);
+            barGrid.Children.Add(_pComputeCpuTrack);
 
-            var trackRam = new Border
+            _pComputeRamTrack = new Border
             {
                 Background = theme.ProgressBarTrack,
                 CornerRadius = new CornerRadius(1.75),
@@ -455,9 +472,16 @@ namespace SysMonitor.Linux.UI
                 Width = 2,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
-            trackRam.Child = _rectComputeRamBar;
-            Grid.SetColumn(trackRam, 2);
-            barGrid.Children.Add(trackRam);
+            _pComputeRamTrack.Child = _rectComputeRamBar;
+            _pComputeRamTrack.SizeChanged += (s, e) =>
+            {
+                if (_lastLoad != null && e.NewSize.Width > 0)
+                {
+                    _rectComputeRamBar.Width = Math.Max(2, Math.Min(e.NewSize.Width, (_lastLoad.RamPercent / 100.0) * e.NewSize.Width));
+                }
+            };
+            Grid.SetColumn(_pComputeRamTrack, 2);
+            barGrid.Children.Add(_pComputeRamTrack);
 
             Grid.SetRow(barGrid, 2);
             grid.Children.Add(barGrid);
@@ -605,7 +629,7 @@ namespace SysMonitor.Linux.UI
             if (_rectComputeCpuBar != null)
             {
                 _rectComputeCpuBar.Background = data.CpuPercent > 80.0 ? theme.AccentRed : (data.CpuPercent > 50.0 ? theme.AccentAmber : theme.AccentBlue);
-                double trackW = 50.0;
+                double trackW = (_pComputeCpuTrack != null && _pComputeCpuTrack.Bounds.Width > 0) ? _pComputeCpuTrack.Bounds.Width : 60.0;
                 _rectComputeCpuBar.Width = Math.Max(2, Math.Min(trackW, (data.CpuPercent / 100.0) * trackW));
             }
 
@@ -617,7 +641,7 @@ namespace SysMonitor.Linux.UI
             if (_rectComputeRamBar != null)
             {
                 _rectComputeRamBar.Background = data.RamPercent > 85 ? theme.AccentRed : theme.AccentEmerald;
-                double trackW = 50.0;
+                double trackW = (_pComputeRamTrack != null && _pComputeRamTrack.Bounds.Width > 0) ? _pComputeRamTrack.Bounds.Width : 60.0;
                 _rectComputeRamBar.Width = Math.Max(2, Math.Min(trackW, (data.RamPercent / 100.0) * trackW));
             }
 
@@ -648,29 +672,14 @@ namespace SysMonitor.Linux.UI
             if (_rectBatteryFill != null)
             {
                 _rectBatteryFill.Background = pBrush;
-                double trackW = 44.0;
+                double trackW = (_pBatteryTrack != null && _pBatteryTrack.Bounds.Width > 0) ? _pBatteryTrack.Bounds.Width : 60.0;
                 double fillW = Math.Max(2, Math.Min(trackW, (data.BatteryPercent / 100.0) * trackW));
                 _rectBatteryFill.Width = fillW;
             }
 
             if (_tbWatts != null)
             {
-                if (isEmerald)
-                {
-                    _tbWatts.Text = data.BatteryPercent >= 95 ? i18n.PowerFull : i18n.PowerAcOnline;
-                }
-                else if (data.StateKind == LinuxPowerStateKind.ChargingFast)
-                {
-                    _tbWatts.Text = data.Watts > 0.5 ? $"+{data.Watts:0.0}W" : i18n.PowerCharging;
-                }
-                else if (data.StateKind == LinuxPowerStateKind.DischargingNormal || data.StateKind == LinuxPowerStateKind.DischargingLow)
-                {
-                    _tbWatts.Text = data.Watts > 0.5 ? $"-{data.Watts:0.0}W" : i18n.PowerDischarging;
-                }
-                else
-                {
-                    _tbWatts.Text = data.StatusText;
-                }
+                _tbWatts.Text = data.GetCompactStatusText(i18n);
                 _tbWatts.Foreground = pBrush;
             }
 

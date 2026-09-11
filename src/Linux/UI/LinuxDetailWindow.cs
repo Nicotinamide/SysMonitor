@@ -785,7 +785,8 @@ namespace SysMonitor.Linux.UI
             // ZeroTier Controller Settings
             var cfg = _memberDir?.CurrentConfig ?? new LinuxMemberConfig();
             sp.Children.Add(LinuxTheme.CreateMutedText(i18n.ControllerUrl));
-            _txtSettingUrl = LinuxTheme.CreateInputTextBox(string.IsNullOrEmpty(cfg.ControllerUrl) ? "https://api.zerotier.com" : cfg.ControllerUrl);
+            _txtSettingUrl = LinuxTheme.CreateInputTextBox(cfg.ControllerUrl ?? "");
+            _txtSettingUrl.Watermark = "https://api.zerotier.com";
             sp.Children.Add(_txtSettingUrl);
 
             var idTokenGrid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
@@ -1304,9 +1305,9 @@ namespace SysMonitor.Linux.UI
                 var cfg = _memberDir?.CurrentConfig;
                 if (cfg != null)
                 {
-                    if (_txtSettingUrl != null) _txtSettingUrl.Text = cfg.ControllerUrl;
-                    if (_txtSettingNwid != null) _txtSettingNwid.Text = cfg.NetworkId;
-                    if (_txtSettingToken != null) _txtSettingToken.Text = cfg.ApiToken;
+                    if (_txtSettingUrl != null) _txtSettingUrl.Text = cfg.ControllerUrl ?? "";
+                    if (_txtSettingNwid != null) _txtSettingNwid.Text = cfg.NetworkId ?? "";
+                    if (_txtSettingToken != null) _txtSettingToken.Text = cfg.ApiToken ?? "";
                 }
                 if (_lblTestStatus != null) _lblTestStatus.Text = "";
             }
@@ -1314,10 +1315,11 @@ namespace SysMonitor.Linux.UI
 
         private void CheckForAppUpdates()
         {
+            var i18n = I18n.Current;
             if (_tbUpdateStatus != null)
             {
                 _tbUpdateStatus.IsVisible = true;
-                _tbUpdateStatus.Text = "⏳ 正在检查最新版本...";
+                _tbUpdateStatus.Text = "⏳ " + i18n.CheckingUpdate;
                 _tbUpdateStatus.Foreground = LinuxTheme.Current.TextMuted;
             }
             if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
@@ -1328,10 +1330,11 @@ namespace SysMonitor.Linux.UI
                 {
                     if (_tbUpdateStatus == null) return;
                     var theme = LinuxTheme.Current;
+                    var curI18n = I18n.Current;
 
                     if (!info.Success)
                     {
-                        _tbUpdateStatus.Text = $"✕ 检查失败: {info.ErrorMessage}";
+                        _tbUpdateStatus.Text = $"✕ {curI18n.UpdateFailed}: {info.ErrorMessage}";
                         _tbUpdateStatus.Foreground = theme.AccentRed;
                         return;
                     }
@@ -1340,18 +1343,18 @@ namespace SysMonitor.Linux.UI
                     {
                         _latestDownloadUrl = info.DownloadUrl;
                         string notes = !string.IsNullOrEmpty(info.ReleaseNotes) ? ("\n" + info.ReleaseNotes.Trim()) : "";
-                        _tbUpdateStatus.Text = $"🚀 发现新版本: {info.LatestVersion}{notes}";
+                        _tbUpdateStatus.Text = $"🚀 {curI18n.NewVersionFound}: {info.LatestVersion}{notes}";
                         _tbUpdateStatus.Foreground = theme.AccentEmerald;
 
                         if (_btnPullUpdate != null)
                         {
-                            _btnPullUpdate.Content = $"⬇ 拉取更新 ({info.LatestVersion})";
+                            _btnPullUpdate.Content = $"⬇ {curI18n.DownloadUpdate} ({info.LatestVersion})";
                             _btnPullUpdate.IsVisible = true;
                         }
                     }
                     else
                     {
-                        _tbUpdateStatus.Text = $"✓ 已是最新版本 (v{UpdateChecker.CurrentVersion})";
+                        _tbUpdateStatus.Text = string.Format("{0} ({1})", curI18n.AlreadyLatest, UpdateChecker.CurrentVersion);
                         _tbUpdateStatus.Foreground = theme.AccentEmerald;
                     }
                 });
@@ -1361,7 +1364,8 @@ namespace SysMonitor.Linux.UI
         private void PerformPullUpdate()
         {
             if (string.IsNullOrEmpty(_latestDownloadUrl)) return;
-            _tbUpdateStatus.Text = "⏳ 正在拉取更新...";
+            var i18n = I18n.Current;
+            _tbUpdateStatus.Text = "⏳ " + (i18n.Lang == AppLanguage.Zh ? "正在拉取更新..." : "Pulling update...");
             _btnPullUpdate.IsEnabled = false;
 
             UpdateChecker.DownloadAndApplyUpdateAsync(_latestDownloadUrl,
@@ -1369,7 +1373,8 @@ namespace SysMonitor.Linux.UI
                 {
                     Dispatcher.UIThread.Post(() =>
                     {
-                        if (_tbUpdateStatus != null) _tbUpdateStatus.Text = $"⏳ 下载中... {pct}%";
+                        if (_tbUpdateStatus != null)
+                            _tbUpdateStatus.Text = string.Format(I18n.Current.Lang == AppLanguage.Zh ? "⏳ 下载中... {0}%" : "⏳ Downloading... {0}%", pct);
                     });
                 },
                 (ok, msg) =>
@@ -1522,7 +1527,10 @@ namespace SysMonitor.Linux.UI
             {
                 string loc = "";
                 if (!string.IsNullOrEmpty(net.Country)) loc += net.Country;
-                if (!string.IsNullOrEmpty(net.City)) loc += (loc.Length > 0 ? " · " : "") + net.City;
+                if (!string.IsNullOrEmpty(net.City) && !string.Equals(net.Country, net.City, StringComparison.OrdinalIgnoreCase))
+                {
+                    loc += (loc.Length > 0 ? " · " : "") + net.City;
+                }
                 if (!string.IsNullOrEmpty(net.Isp)) loc += (loc.Length > 0 ? " · " : "") + net.Isp;
                 _tbNetGeoIsp.Text = !string.IsNullOrEmpty(loc) ? loc : i18n.NetFetching;
             }
