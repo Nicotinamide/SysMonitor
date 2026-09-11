@@ -36,6 +36,7 @@
   <!-- Linux 平台：编译 Linux 原生引擎及 Avalonia UI，完全隔离 Windows WPF 专有代码 -->
   <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
     <Compile Include="src/Linux/**/*.cs" />
+    <Compile Include="src/UpdateChecker.cs" />
     <PackageReference Include="Avalonia" Version="11.0.10" />
     <PackageReference Include="Avalonia.Desktop" Version="11.0.10" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.10" />

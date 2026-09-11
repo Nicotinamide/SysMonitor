@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -76,11 +77,43 @@ namespace SysMonitor.Linux.UI
     public static class LinuxTheme
     {
         public static event Action ThemeChanged;
-        public static LinuxThemePalette Current { get; private set; } = LinuxThemePalette.CreateDark();
+        private static string _configPath;
+        public static LinuxThemePalette Current { get; private set; }
+
+        static LinuxTheme()
+        {
+            try
+            {
+                string configDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "sysmonitor");
+                if (!Directory.Exists(configDir)) Directory.CreateDirectory(configDir);
+                _configPath = Path.Combine(configDir, "theme.cfg");
+
+                if (File.Exists(_configPath))
+                {
+                    string saved = File.ReadAllText(_configPath).Trim().ToLowerInvariant();
+                    if (saved == "dark")
+                    {
+                        Current = LinuxThemePalette.CreateDark();
+                        return;
+                    }
+                }
+            }
+            catch { }
+            // 默认对齐 Windows 初始风格：亮色模式
+            Current = LinuxThemePalette.CreateLight();
+        }
 
         public static void SetDark(bool isDark)
         {
             Current = isDark ? LinuxThemePalette.CreateDark() : LinuxThemePalette.CreateLight();
+            try
+            {
+                if (!string.IsNullOrEmpty(_configPath))
+                {
+                    File.WriteAllText(_configPath, isDark ? "dark" : "light");
+                }
+            }
+            catch { }
             ThemeChanged?.Invoke();
         }
 

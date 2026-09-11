@@ -36,7 +36,7 @@ namespace SysMonitor
 
     public static class UpdateChecker
     {
-        public const string CurrentVersion = "v1.0.6";
+        public const string CurrentVersion = "v1.0.7";
         public const string RepoOwner = "Nicotinamide";
         public const string RepoName = "SysMonitor";
 
@@ -172,7 +172,31 @@ namespace SysMonitor
             }
             else
             {
-                var linuxMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*\\.tar\\.gz)\"", RegexOptions.IgnoreCase);
+                // Linux: 检测 CPU 架构以精准匹配 arm64 或 x64
+                bool isArm64 = false;
+                try
+                {
+                    if (File.Exists("/proc/cpuinfo"))
+                    {
+                        string cpuinfo = File.ReadAllText("/proc/cpuinfo");
+                        if (cpuinfo.IndexOf("aarch64", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            cpuinfo.IndexOf("ARM", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            isArm64 = true;
+                        }
+                    }
+                }
+                catch { }
+
+                string pattern = isArm64
+                    ? "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*arm64[^\"]*\\.tar\\.gz)\""
+                    : "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*x64[^\"]*\\.tar\\.gz)\"";
+
+                var linuxMatch = Regex.Match(json, pattern, RegexOptions.IgnoreCase);
+                if (!linuxMatch.Success)
+                {
+                    linuxMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*\\.tar\\.gz)\"", RegexOptions.IgnoreCase);
+                }
                 if (linuxMatch.Success)
                 {
                     info.DownloadUrl = linuxMatch.Groups[1].Value;
@@ -244,6 +268,160 @@ namespace SysMonitor
 
                     Log("Starting update download from: " + downloadUrl);
 
+                    string currentExe = Process.GetCurrentProcess().MainModule.FileName;
+                    int currentPid = Process.GetCurrentProcess().Id;
+                    string currentDir = Path.GetDirectoryName(currentExe);
+
+                    // ==========================================
+                    // 1. Linux 平台下载、解压与热替换更新流程
+                    // ==========================================
+                    if (Environment.OSVersion.Platform != PlatformID.Win32NT)
+                    {
+                        string tempTarPath = Path.Combine(Path.GetTempPath(), "SysMonitor_Update_" + Guid.NewGuid().ToString("N") + ".tar.gz");
+                        string extractDir = Path.Combine(Path.GetTempPath(), "SysMonitor_Extract_" + Guid.NewGuid().ToString("N"));
+
+                        using (WebClient client = new WebClient())
+                        {
+                            client.Headers.Add("User-Agent", "SysMonitor-Updater");
+                            client.DownloadProgressChanged += delegate(object s, DownloadProgressChangedEventArgs e)
+                            {
+                                if (progressCallback != null) progressCallback(e.ProgressPercentage);
+                            };
+                            client.DownloadFile(new Uri(downloadUrl), tempTarPath);
+                        }
+
+                        if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
+                        Directory.CreateDirectory(extractDir);
+
+                        // 解压 tar.gz
+                        ProcessStartInfo tarPsi = new ProcessStartInfo
+                        {
+                            FileName = "tar",
+                            Arguments = string.Format("-xzf \"{0}\" -C \"{1}\"", tempTarPath, extractDir),
+                            CreateNoWindow = true,
+                            UseShellExecute = false
+                        };
+                        using (Process p = Process.Start(tarPsi))
+                        {
+                            if (p != null) p.WaitForExit(30000);
+                        }
+
+                        string foundBin = Path.Combine(extractDir, "sysmonitor");
+                        if (!File.Exists(foundBin))
+                        {
+                            string[] bins = Directory.GetFiles(extractDir, "sysmonitor", SearchOption.AllDirectories);
+                            if (bins.Length > 0) foundBin = bins[0];
+                        }
+
+                        if (!File.Exists(foundBin))
+                        {
+                            if (finishCallback != null) finishCallback(false, "压缩包中未找到 sysmonitor 执行程序");
+                            return;
+                        }
+
+                        // 授予新可执行文件执行权限
+                        try
+                        {
+                            ProcessStartInfo chmodPsi = new ProcessStartInfo("chmod", string.Format("+x \"{0}\"", foundBin))
+                            {
+                                CreateNoWindow = true,
+                                UseShellExecute = false
+                            };
+                            using (Process p = Process.Start(chmodPsi))
+                            {
+                                if (p != null) p.WaitForExit(2000);
+                            }
+                        }
+                        catch { }
+
+                        // 检查当前程序目录写权限
+                        bool hasWritePermission = false;
+                        try
+                        {
+                            string testFile = Path.Combine(currentDir, ".perm_test_" + Guid.NewGuid().ToString("N"));
+                            File.WriteAllText(testFile, "test");
+                            File.Delete(testFile);
+                            hasWritePermission = true;
+                        }
+                        catch
+                        {
+                            hasWritePermission = false;
+                        }
+
+                        if (!hasWritePermission)
+                        {
+                            string errMsg = string.Format("当前安装目录 ({0}) 需要管理员权限。\n更新文件已下载至: {1}\n请使用 sudo 复制替换，或通过包管理器 (pacman/yay) 升级。", currentDir, foundBin);
+                            Log(errMsg);
+                            if (finishCallback != null) finishCallback(false, errMsg);
+                            return;
+                        }
+
+                        // Linux 运行中可执行文件写保护 (ETXTBSY) 绕过：先重命名旧文件再覆盖
+                        string oldBackup = currentExe + ".old";
+                        try
+                        {
+                            if (File.Exists(oldBackup)) File.Delete(oldBackup);
+                            File.Move(currentExe, oldBackup);
+                        }
+                        catch
+                        {
+                            try { File.Delete(currentExe); } catch { }
+                        }
+
+                        File.Copy(foundBin, currentExe, true);
+
+                        // 确保目标程序具有执行权限
+                        try
+                        {
+                            ProcessStartInfo chmodPsi = new ProcessStartInfo("chmod", string.Format("+x \"{0}\"", currentExe))
+                            {
+                                CreateNoWindow = true,
+                                UseShellExecute = false
+                            };
+                            using (Process p = Process.Start(chmodPsi))
+                            {
+                                if (p != null) p.WaitForExit(2000);
+                            }
+                        }
+                        catch { }
+
+                        try { File.Delete(tempTarPath); } catch { }
+                        try { Directory.Delete(extractDir, true); } catch { }
+
+                        Log("Linux update applied successfully. Restarting: " + currentExe);
+                        if (finishCallback != null) finishCallback(true, "下载完成，正在重启更新...");
+
+                        // 创建重启启动脚本
+                        string restartSh = Path.Combine(Path.GetTempPath(), "sysmonitor_restart.sh");
+                        string shContent = string.Format("#!/bin/sh\nsleep 0.6\n\"{0}\" &\nrm -f \"$0\"\n", currentExe);
+                        File.WriteAllText(restartSh, shContent);
+                        try
+                        {
+                            using (Process p = Process.Start("chmod", string.Format("+x \"{0}\"", restartSh)))
+                            {
+                                if (p != null) p.WaitForExit(2000);
+                            }
+                        }
+                        catch { }
+
+                        ProcessStartInfo rPsi = new ProcessStartInfo("/bin/sh", string.Format("\"{0}\"", restartSh))
+                        {
+                            CreateNoWindow = true,
+                            UseShellExecute = false
+                        };
+                        Process.Start(rPsi);
+
+                        ThreadPool.QueueUserWorkItem(delegate
+                        {
+                            Thread.Sleep(300);
+                            Environment.Exit(0);
+                        });
+                        return;
+                    }
+
+                    // ==========================================
+                    // 2. Windows 平台下载与热替换更新流程
+                    // ==========================================
                     string tempExePath = Path.Combine(Path.GetTempPath(), "SysMonitor_Latest.exe");
                     if (File.Exists(tempExePath))
                     {
@@ -315,9 +493,6 @@ namespace SysMonitor
                     Log("Update file ready (" + fi.Length + " bytes). Preparing updater batch...");
 
                     // 替换并重启
-                    string currentExe = Process.GetCurrentProcess().MainModule.FileName;
-                    int currentPid = Process.GetCurrentProcess().Id;
-                    string currentDir = Path.GetDirectoryName(currentExe);
                     string batchScript = Path.Combine(Path.GetTempPath(), "sysmonitor_updater.bat");
 
                     string batContent = string.Format(

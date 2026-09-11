@@ -6,6 +6,8 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
+using SysMonitor;
 
 namespace SysMonitor.Linux.UI
 {
@@ -37,6 +39,18 @@ namespace SysMonitor.Linux.UI
         private TextBlock _tbZtStatus;
         private TextBlock _tbZtMoon;
 
+        // Update Controls
+        private TextBlock _tbUpdateStatus;
+        private Button _btnPullUpdate;
+        private string _latestDownloadUrl;
+
+        // Cached Telemetry for Rebuild
+        private double _lastCpu = 0;
+        private MemorySnapshot _lastMem;
+        private NetworkRateSnapshot _lastNet;
+        private BatterySnapshot _lastBat;
+        private ZeroTierLocalSnapshot _lastZt;
+
         public DateTime LastDeactivatedTime { get; private set; }
 
         public LinuxDetailWindow(LinuxFloatingWindow parentFloat)
@@ -65,13 +79,22 @@ namespace SysMonitor.Linux.UI
 
             LinuxTheme.ThemeChanged += () =>
             {
-                var theme = LinuxTheme.Current;
-                if (_rootBorder != null)
-                {
-                    _rootBorder.Background = theme.CardBg;
-                    _rootBorder.BorderBrush = theme.BorderBrush;
-                }
+                RebuildUi();
             };
+        }
+
+        public void RebuildUi()
+        {
+            bool wasSettingsVisible = _overlaySettings != null && _overlaySettings.IsVisible;
+            BuildUi();
+            if (_overlaySettings != null)
+            {
+                _overlaySettings.IsVisible = wasSettingsVisible;
+            }
+            if (_lastMem != null)
+            {
+                UpdateTelemetry(_lastCpu, _lastMem, _lastNet, _lastBat, _lastZt);
+            }
         }
 
         private void BuildUi()
@@ -255,10 +278,11 @@ namespace SysMonitor.Linux.UI
             {
                 Background = theme.CardBg,
                 BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(1),
+                BorderThickness = new Thickness(1.2),
                 CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(14, 12),
-                IsVisible = false
+                IsVisible = false,
+                BoxShadow = BoxShadows.Parse("0 4 18 #32000000")
             };
 
             var spSet = new StackPanel { Spacing = 8 };
@@ -274,16 +298,17 @@ namespace SysMonitor.Linux.UI
             gSetHead.Children.Add(btnSetClose);
             spSet.Children.Add(gSetHead);
 
-            // Theme toggle button
+            // 1. Theme toggle button
             var btnThemeToggle = new Button
             {
-                Content = "🎨 切换主题 (亮色 / 暗色)",
-                FontSize = 10,
+                Content = theme.IsDark ? "☀️ 切换为浅色模式 (Light)" : "🌙 切换为深色模式 (Dark)",
+                FontSize = 10.5,
+                FontWeight = FontWeight.SemiBold,
                 Foreground = theme.AccentBlue,
                 Background = theme.InnerTileBg,
                 BorderBrush = theme.BorderMuted,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(8, 4),
+                Padding = new Thickness(10, 6),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
@@ -293,21 +318,154 @@ namespace SysMonitor.Linux.UI
             };
             spSet.Children.Add(btnThemeToggle);
 
-            // Version info
-            var tbVer = LinuxTheme.CreateMuted("当前版本: v1.0.5 (Linux Native)", 10);
-            spSet.Children.Add(tbVer);
-
-            // GitHub link button
-            var btnGithub = new Button
+            // 2. Online Update Box
+            var updateBox = new Border
             {
-                Content = "🌐 查看 GitHub 官方仓库",
-                FontSize = 10,
-                Foreground = theme.TextSecondary,
                 Background = theme.InnerTileBg,
                 BorderBrush = theme.BorderMuted,
                 BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(10, 8),
+                Margin = new Thickness(0, 2, 0, 2)
+            };
+            var updateSp = new StackPanel { Spacing = 6 };
+
+            var gUpHead = new Grid();
+            gUpHead.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            gUpHead.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var tbVer = new TextBlock
+            {
+                Text = "当前版本: " + UpdateChecker.CurrentVersion + " (Linux " + (Environment.Is64BitProcess ? "x64" : "x86") + ")",
+                FontSize = 10,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = theme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(tbVer, 0);
+            var tbBranch = new TextBlock
+            {
+                Text = "main",
+                FontSize = 9.5,
+                Foreground = theme.TextMuted,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(tbBranch, 1);
+            gUpHead.Children.Add(tbVer);
+            gUpHead.Children.Add(tbBranch);
+            updateSp.Children.Add(gUpHead);
+
+            _tbUpdateStatus = new TextBlock
+            {
+                Text = "",
+                FontSize = 9.5,
+                Foreground = theme.TextMuted,
+                TextWrapping = TextWrapping.Wrap,
+                IsVisible = false
+            };
+            updateSp.Children.Add(_tbUpdateStatus);
+
+            // Three buttons in one row: 检查更新, 拉取更新 (仅有更新时显示), GitHub
+            var pnlActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 2, 0, 0) };
+
+            var btnCheckUpdate = new Button
+            {
+                Content = "🔄 检查更新",
+                FontSize = 10,
+                Foreground = theme.AccentBlue,
+                Background = theme.CardBg,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(1),
                 Padding = new Thickness(8, 4),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            btnCheckUpdate.Click += (s, e) =>
+            {
+                _tbUpdateStatus.IsVisible = true;
+                _tbUpdateStatus.Text = "⏳ 正在连接 GitHub 检查更新...";
+                _tbUpdateStatus.Foreground = theme.TextMuted;
+                if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
+
+                UpdateChecker.CheckForUpdatesAsync(info =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (!info.Success)
+                        {
+                            _tbUpdateStatus.Text = "✕ 检查更新失败: " + info.ErrorMessage;
+                            _tbUpdateStatus.Foreground = theme.AccentRed;
+                            if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
+                            return;
+                        }
+
+                        if (info.HasUpdate)
+                        {
+                            _latestDownloadUrl = info.DownloadUrl;
+                            string notes = !string.IsNullOrEmpty(info.ReleaseNotes) ? ("\n" + info.ReleaseNotes.Trim()) : "";
+                            _tbUpdateStatus.Text = "🚀 发现新版本: " + info.LatestVersion + notes;
+                            _tbUpdateStatus.Foreground = theme.AccentEmerald;
+                            if (_btnPullUpdate != null)
+                            {
+                                _btnPullUpdate.Content = "⬇ 拉取更新 (" + info.LatestVersion + ")";
+                                _btnPullUpdate.IsVisible = true;
+                            }
+                        }
+                        else
+                        {
+                            _tbUpdateStatus.Text = "✓ 当前已是最新版本 (" + UpdateChecker.CurrentVersion + ")";
+                            _tbUpdateStatus.Foreground = theme.AccentEmerald;
+                            if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
+                        }
+                    });
+                });
+            };
+            pnlActions.Children.Add(btnCheckUpdate);
+
+            _btnPullUpdate = new Button
+            {
+                Content = "⬇ 拉取更新",
+                FontSize = 10,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentEmerald,
+                Background = theme.CardBg,
+                BorderBrush = theme.AccentEmerald,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(8, 4),
+                Cursor = new Cursor(StandardCursorType.Hand),
+                IsVisible = false
+            };
+            _btnPullUpdate.Click += (s, e) =>
+            {
+                if (!string.IsNullOrEmpty(_latestDownloadUrl))
+                {
+                    _btnPullUpdate.IsEnabled = false;
+                    _tbUpdateStatus.Text = "⏳ 准备下载并热替换更新...";
+                    _tbUpdateStatus.Foreground = theme.AccentAmber;
+
+                    UpdateChecker.DownloadAndApplyUpdateAsync(_latestDownloadUrl,
+                        pct => Dispatcher.UIThread.Post(() =>
+                        {
+                            _tbUpdateStatus.Text = string.Format("⏳ 下载更新中... {0}%", pct);
+                        }),
+                        (ok, msg) => Dispatcher.UIThread.Post(() =>
+                        {
+                            _btnPullUpdate.IsEnabled = true;
+                            _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
+                            _tbUpdateStatus.Foreground = ok ? theme.AccentEmerald : theme.AccentRed;
+                        }));
+                }
+            };
+            pnlActions.Children.Add(_btnPullUpdate);
+
+            var btnGithub = new Button
+            {
+                Content = "🌐 GitHub",
+                FontSize = 10,
+                Foreground = theme.TextSecondary,
+                Background = theme.CardBg,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(8, 4),
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
             btnGithub.Click += (s, e) =>
@@ -323,9 +481,13 @@ namespace SysMonitor.Linux.UI
                 }
                 catch { }
             };
-            spSet.Children.Add(btnGithub);
+            pnlActions.Children.Add(btnGithub);
 
-            // Exit application button
+            updateSp.Children.Add(pnlActions);
+            updateBox.Child = updateSp;
+            spSet.Children.Add(updateBox);
+
+            // 3. Exit application button
             var btnExit = new Button
             {
                 Content = "🚪 退出 SysMonitor",
@@ -401,6 +563,12 @@ namespace SysMonitor.Linux.UI
 
         public void UpdateTelemetry(double cpu, MemorySnapshot mem, NetworkRateSnapshot net, BatterySnapshot bat, ZeroTierLocalSnapshot zt)
         {
+            _lastCpu = cpu;
+            _lastMem = mem;
+            _lastNet = net;
+            _lastBat = bat;
+            _lastZt = zt;
+
             var theme = LinuxTheme.Current;
 
             // CPU

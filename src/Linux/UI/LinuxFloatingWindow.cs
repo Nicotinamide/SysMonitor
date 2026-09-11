@@ -70,6 +70,7 @@ namespace SysMonitor.Linux.UI
             {
                 BuildUi();
                 SetupContextMenu();
+                RefreshTelemetry();
             };
 
             Opened += (s, e) =>
@@ -106,17 +107,17 @@ namespace SysMonitor.Linux.UI
 
             var spMain = new StackPanel { Spacing = 4 };
 
-            // 1. Compute Tile (CPU & RAM)
-            spMain.Children.Add(BuildComputeTile(theme));
+            // 1. Power Tile (供电与功耗)
+            spMain.Children.Add(BuildPowerTile(theme));
 
-            // 2. Network Tile
+            // 2. Network Tile (网络与公网出口)
             spMain.Children.Add(BuildNetworkTile(theme));
 
-            // 3. ZeroTier Tile
+            // 3. ZeroTier Tile (虚拟局域网与 Moon)
             spMain.Children.Add(BuildZeroTierTile(theme));
 
-            // 4. Power Tile
-            spMain.Children.Add(BuildPowerTile(theme));
+            // 4. Compute Tile (CPU & RAM 负载)
+            spMain.Children.Add(BuildComputeTile(theme));
 
             _rootBorder.Child = spMain;
             Content = _rootBorder;
@@ -432,13 +433,16 @@ namespace SysMonitor.Linux.UI
         private void SetupContextMenu()
         {
             var menu = new ContextMenu();
-            var miDetail = new MenuItem { Header = "展开 / 收起详情看板" };
+            var miDetail = new MenuItem { Header = "📋 展开 / 收起详情看板" };
             miDetail.Click += (s, e) => ToggleDetailWindow();
 
-            var miTheme = new MenuItem { Header = "切换深色 / 浅色主题" };
+            var miRefresh = new MenuItem { Header = "⟳ 刷新公网出口与遥测" };
+            miRefresh.Click += (s, e) => RefreshTelemetry();
+
+            var miTheme = new MenuItem { Header = LinuxTheme.Current.IsDark ? "☀️ 切换为浅色模式" : "🌙 切换为深色模式" };
             miTheme.Click += (s, e) => LinuxTheme.SetDark(!LinuxTheme.Current.IsDark);
 
-            var miExit = new MenuItem { Header = "退出 SysMonitor" };
+            var miExit = new MenuItem { Header = "🚪 退出 SysMonitor" };
             miExit.Click += (s, e) =>
             {
                 _detailWindow?.Close();
@@ -446,6 +450,8 @@ namespace SysMonitor.Linux.UI
             };
 
             menu.Items.Add(miDetail);
+            menu.Items.Add(miRefresh);
+            menu.Items.Add(new Separator());
             menu.Items.Add(miTheme);
             menu.Items.Add(new Separator());
             menu.Items.Add(miExit);
