@@ -10,11 +10,12 @@ namespace SysMonitor.Linux.UI
     {
         public bool IsDark { get; set; }
 
+        public IBrush WindowBg { get; set; }
         public IBrush CardBg { get; set; }
         public IBrush BorderBrush { get; set; }
         public IBrush BorderMuted { get; set; }
         public IBrush InnerTileBg { get; set; }
-        public IBrush PillBg { get; set; }
+        public IBrush ProgressBarTrack { get; set; }
 
         public IBrush TextPrimary { get; set; }
         public IBrush TextSecondary { get; set; }
@@ -25,47 +26,49 @@ namespace SysMonitor.Linux.UI
         public IBrush AccentAmber { get; set; }
         public IBrush AccentRed { get; set; }
 
-        public static LinuxThemePalette CreateLight()
-        {
-            return new LinuxThemePalette
-            {
-                IsDark = false,
-                CardBg = new SolidColorBrush(Color.FromArgb(242, 255, 255, 255)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(140, 226, 232, 240)),
-                BorderMuted = new SolidColorBrush(Color.FromArgb(100, 241, 245, 249)),
-                InnerTileBg = new SolidColorBrush(Color.FromArgb(160, 248, 250, 252)),
-                PillBg = new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)),
-
-                TextPrimary = new SolidColorBrush(Color.FromRgb(30, 41, 59)),
-                TextSecondary = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
-                TextMuted = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
-
-                AccentBlue = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
-                AccentEmerald = new SolidColorBrush(Color.FromRgb(5, 150, 105)),
-                AccentAmber = new SolidColorBrush(Color.FromRgb(217, 119, 6)),
-                AccentRed = new SolidColorBrush(Color.FromRgb(220, 38, 38))
-            };
-        }
-
         public static LinuxThemePalette CreateDark()
         {
             return new LinuxThemePalette
             {
                 IsDark = true,
-                CardBg = new SolidColorBrush(Color.FromArgb(240, 30, 31, 34)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(130, 63, 66, 72)),
-                BorderMuted = new SolidColorBrush(Color.FromArgb(90, 53, 55, 60)),
-                InnerTileBg = new SolidColorBrush(Color.FromArgb(150, 35, 37, 41)),
-                PillBg = new SolidColorBrush(Color.FromArgb(220, 24, 25, 28)),
+                WindowBg = new SolidColorBrush(Color.FromRgb(13, 17, 23)),
+                CardBg = new SolidColorBrush(Color.FromRgb(22, 27, 34)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(48, 54, 61)),
+                BorderMuted = new SolidColorBrush(Color.FromRgb(33, 38, 45)),
+                InnerTileBg = new SolidColorBrush(Color.FromRgb(13, 17, 23)),
+                ProgressBarTrack = new SolidColorBrush(Color.FromRgb(33, 38, 45)),
 
-                TextPrimary = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
-                TextSecondary = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
-                TextMuted = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                TextPrimary = new SolidColorBrush(Color.FromRgb(240, 246, 252)),
+                TextSecondary = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                TextMuted = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
 
-                AccentBlue = new SolidColorBrush(Color.FromRgb(59, 130, 246)),
+                AccentBlue = new SolidColorBrush(Color.FromRgb(88, 166, 255)),
                 AccentEmerald = new SolidColorBrush(Color.FromRgb(16, 185, 129)),
                 AccentAmber = new SolidColorBrush(Color.FromRgb(245, 158, 11)),
-                AccentRed = new SolidColorBrush(Color.FromRgb(239, 68, 68))
+                AccentRed = new SolidColorBrush(Color.FromRgb(248, 81, 73))
+            };
+        }
+
+        public static LinuxThemePalette CreateLight()
+        {
+            return new LinuxThemePalette
+            {
+                IsDark = false,
+                WindowBg = new SolidColorBrush(Color.FromRgb(246, 248, 250)),
+                CardBg = new SolidColorBrush(Color.FromRgb(255, 255, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(208, 215, 222)),
+                BorderMuted = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                InnerTileBg = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
+                ProgressBarTrack = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+
+                TextPrimary = new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+                TextSecondary = new SolidColorBrush(Color.FromRgb(51, 65, 85)),
+                TextMuted = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+
+                AccentBlue = new SolidColorBrush(Color.FromRgb(9, 105, 218)),
+                AccentEmerald = new SolidColorBrush(Color.FromRgb(5, 150, 105)),
+                AccentAmber = new SolidColorBrush(Color.FromRgb(217, 119, 6)),
+                AccentRed = new SolidColorBrush(Color.FromRgb(220, 38, 38))
             };
         }
     }
@@ -73,12 +76,24 @@ namespace SysMonitor.Linux.UI
     public static class LinuxTheme
     {
         public static event Action ThemeChanged;
-        public static LinuxThemePalette Current { get; private set; } = LinuxThemePalette.CreateLight();
+        public static LinuxThemePalette Current { get; private set; } = LinuxThemePalette.CreateDark();
 
         public static void SetDark(bool isDark)
         {
             Current = isDark ? LinuxThemePalette.CreateDark() : LinuxThemePalette.CreateLight();
             ThemeChanged?.Invoke();
+        }
+
+        public static Border CreateComplicationBorder()
+        {
+            return new Border
+            {
+                Height = 38,
+                Background = Current.CardBg,
+                CornerRadius = new CornerRadius(7),
+                BorderBrush = Current.BorderBrush,
+                BorderThickness = new Thickness(0.8)
+            };
         }
 
         public static Border CreateCardBorder()

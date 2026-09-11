@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -12,37 +11,425 @@ namespace SysMonitor.Linux.UI
 {
     public class LinuxFloatingWindow : Window
     {
-        private LinuxDetailWindow _detailWindow;
+        private const double WidgetWidth = 126;
 
-        // UI TextBlocks
-        private TextBlock _tbCpuVal;
-        private Border _barCpuFill;
-        private TextBlock _tbRamVal;
-        private Border _barRamFill;
-        private TextBlock _tbNetDown;
-        private TextBlock _tbNetUp;
-        private TextBlock _tbPower;
-        private Border _dotZt;
-        private TextBlock _tbZtText;
-        private Border _rootPill;
+        private LinuxDetailWindow _detailWindow;
+        private Border _rootBorder;
+
+        // Tile 1: Compute (CPU & RAM)
+        private TextBlock _tbComputeCpuVal;
+        private Border _rectComputeCpuBar;
+        private TextBlock _tbComputeRamVal;
+        private Border _rectComputeRamBar;
+
+        // Tile 2: Network
+        private TextBlock _tbNetRates;
+        private TextBlock _tbPublicIp;
+
+        // Tile 3: ZeroTier & Moon
+        private Border _elTile3Dot;
+        private TextBlock _tbTile3Title;
+        private TextBlock _tbTile3Status;
+        private TextBlock _tbTile3Sub;
+
+        // Tile 4: Power
+        private TextBlock _tbBatteryPercent;
+        private TextBlock _tbPcWatts;
+        private Border _rectBatteryFill;
+        private TextBlock _tbWatts;
+
+        // Drag & Click tracking (1:1 with Windows)
+        private Point _pointerDownPos;
+        private bool _isDragging = false;
 
         private DispatcherTimer _timer;
 
         public LinuxFloatingWindow()
         {
-            Title = "SysMonitor";
+            Title = "SysMonitorWidget";
+            Width = WidgetWidth;
             SystemDecorations = SystemDecorations.None;
             Background = Brushes.Transparent;
             TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
             Topmost = true;
             ShowInTaskbar = false;
             CanResize = false;
-            SizeToContent = SizeToContent.WidthAndHeight;
+            SizeToContent = SizeToContent.Height;
             WindowStartupLocation = WindowStartupLocation.Manual;
 
             BuildUi();
+            SetupContextMenu();
 
-            // 右键快捷菜单 (上下文菜单)
+            // 单击展开 / 拖拽移动 (与 Windows 1:1 交互)
+            PointerPressed += OnPointerPressed;
+            PointerMoved += OnPointerMoved;
+            PointerReleased += OnPointerReleased;
+
+            LinuxTheme.ThemeChanged += () =>
+            {
+                BuildUi();
+                SetupContextMenu();
+            };
+
+            Opened += (s, e) =>
+            {
+                var screen = Screens.Primary ?? Screens.All.FirstOrDefault();
+                if (screen != null)
+                {
+                    Position = new PixelPoint(screen.WorkingArea.X + screen.WorkingArea.Width - (int)WidgetWidth - 24, screen.WorkingArea.Y + 60);
+                }
+
+                _detailWindow = new LinuxDetailWindow(this);
+
+                _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                _timer.Tick += (ts, te) => RefreshTelemetry();
+                _timer.Start();
+                RefreshTelemetry();
+            };
+        }
+
+        private void BuildUi()
+        {
+            var theme = LinuxTheme.Current;
+
+            _rootBorder = new Border
+            {
+                Width = WidgetWidth,
+                CornerRadius = new CornerRadius(16),
+                Background = theme.WindowBg,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(6, 6, 6, 8),
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+
+            var spMain = new StackPanel { Spacing = 4 };
+
+            // 1. Compute Tile (CPU & RAM)
+            spMain.Children.Add(BuildComputeTile(theme));
+
+            // 2. Network Tile
+            spMain.Children.Add(BuildNetworkTile(theme));
+
+            // 3. ZeroTier Tile
+            spMain.Children.Add(BuildZeroTierTile(theme));
+
+            // 4. Power Tile
+            spMain.Children.Add(BuildPowerTile(theme));
+
+            _rootBorder.Child = spMain;
+            Content = _rootBorder;
+        }
+
+        private Border BuildComputeTile(LinuxThemePalette theme)
+        {
+            var tile = LinuxTheme.CreateComplicationBorder();
+            var grid = new Grid { Margin = new Thickness(6, 4, 6, 4) };
+            grid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+            grid.RowDefinitions.Add(new RowDefinition(3.5, GridUnitType.Pixel));
+
+            // Row 0: CPU {val}% (left) and RAM {val}% (right)
+            var topGrid = new Grid();
+            topGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            topGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var spCpu = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var tbCpuLabel = new TextBlock
+            {
+                Text = "CPU ",
+                FontSize = 9,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _tbComputeCpuVal = new TextBlock
+            {
+                Text = "0.0%",
+                FontSize = 9.5,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentBlue,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spCpu.Children.Add(tbCpuLabel);
+            spCpu.Children.Add(_tbComputeCpuVal);
+            Grid.SetColumn(spCpu, 0);
+            topGrid.Children.Add(spCpu);
+
+            var spRam = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+            var tbRamLabel = new TextBlock
+            {
+                Text = "RAM ",
+                FontSize = 9,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _tbComputeRamVal = new TextBlock
+            {
+                Text = "0%",
+                FontSize = 9.5,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentEmerald,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spRam.Children.Add(tbRamLabel);
+            spRam.Children.Add(_tbComputeRamVal);
+            Grid.SetColumn(spRam, 1);
+            topGrid.Children.Add(spRam);
+
+            Grid.SetRow(topGrid, 0);
+            grid.Children.Add(topGrid);
+
+            // Row 1: Split progress bars
+            var barGrid = new Grid();
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition(4, GridUnitType.Pixel));
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
+            var trackCpu = new Border
+            {
+                Background = theme.ProgressBarTrack,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            _rectComputeCpuBar = new Border
+            {
+                Background = theme.AccentBlue,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                Width = 0,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            trackCpu.Child = _rectComputeCpuBar;
+            Grid.SetColumn(trackCpu, 0);
+            barGrid.Children.Add(trackCpu);
+
+            var trackRam = new Border
+            {
+                Background = theme.ProgressBarTrack,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            _rectComputeRamBar = new Border
+            {
+                Background = theme.AccentEmerald,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                Width = 0,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            trackRam.Child = _rectComputeRamBar;
+            Grid.SetColumn(trackRam, 2);
+            barGrid.Children.Add(trackRam);
+
+            Grid.SetRow(barGrid, 1);
+            grid.Children.Add(barGrid);
+
+            tile.Child = grid;
+            return tile;
+        }
+
+        private Border BuildNetworkTile(LinuxThemePalette theme)
+        {
+            var tile = LinuxTheme.CreateComplicationBorder();
+            var sp = new StackPanel { Margin = new Thickness(6, 4, 6, 4) };
+
+            _tbNetRates = new TextBlock
+            {
+                Text = "↓ 0.0K   ↑ 0.0K",
+                FontSize = 9.5,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.TextSecondary
+            };
+            sp.Children.Add(_tbNetRates);
+
+            var ipRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var tbIcon = new TextBlock
+            {
+                Text = "🌐",
+                FontSize = 9,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0)
+            };
+            _tbPublicIp = new TextBlock
+            {
+                Text = "127.0.0.1",
+                FontSize = 9.5,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.AccentBlue,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = 85
+            };
+            ipRow.Children.Add(tbIcon);
+            ipRow.Children.Add(_tbPublicIp);
+            sp.Children.Add(ipRow);
+
+            tile.Child = sp;
+            return tile;
+        }
+
+        private Border BuildZeroTierTile(LinuxThemePalette theme)
+        {
+            var tile = LinuxTheme.CreateComplicationBorder();
+            var grid = new Grid { Margin = new Thickness(6, 4, 6, 4) };
+            grid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+            grid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+            grid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            grid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            // Row 0: Dot + Moon (left), Status (right)
+            var spLeft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            _elTile3Dot = new Border
+            {
+                Width = 6.5,
+                Height = 6.5,
+                CornerRadius = new CornerRadius(3.25),
+                Background = theme.AccentEmerald,
+                Margin = new Thickness(0, 0, 4.5, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _tbTile3Title = new TextBlock
+            {
+                Text = "Moon",
+                FontSize = 10,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = theme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spLeft.Children.Add(_elTile3Dot);
+            spLeft.Children.Add(_tbTile3Title);
+            Grid.SetRow(spLeft, 0);
+            Grid.SetColumn(spLeft, 0);
+            grid.Children.Add(spLeft);
+
+            _tbTile3Status = new TextBlock
+            {
+                Text = "--",
+                FontSize = 10.5,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentEmerald,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetRow(_tbTile3Status, 0);
+            Grid.SetColumn(_tbTile3Status, 1);
+            grid.Children.Add(_tbTile3Status);
+
+            // Row 1: Node ID or Subtext
+            _tbTile3Sub = new TextBlock
+            {
+                Text = "ZeroTier",
+                FontSize = 9.5,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetRow(_tbTile3Sub, 1);
+            Grid.SetColumn(_tbTile3Sub, 0);
+            Grid.SetColumnSpan(_tbTile3Sub, 2);
+            grid.Children.Add(_tbTile3Sub);
+
+            tile.Child = grid;
+            return tile;
+        }
+
+        private Border BuildPowerTile(LinuxThemePalette theme)
+        {
+            var tile = LinuxTheme.CreateComplicationBorder();
+            var grid = new Grid { Margin = new Thickness(6, 4, 6, 4) };
+            grid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+            grid.RowDefinitions.Add(new RowDefinition(3, GridUnitType.Pixel));
+            grid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+            grid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            grid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            // Row 0: ⚡ 100% (left) and 30.6W (right)
+            var spBat = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
+            var iconBat = new TextBlock
+            {
+                Text = "⚡",
+                FontSize = 10,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 2, 0)
+            };
+            _tbBatteryPercent = new TextBlock
+            {
+                Text = "100%",
+                FontSize = 11,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spBat.Children.Add(iconBat);
+            spBat.Children.Add(_tbBatteryPercent);
+            Grid.SetRow(spBat, 0);
+            Grid.SetColumn(spBat, 0);
+            grid.Children.Add(spBat);
+
+            _tbPcWatts = new TextBlock
+            {
+                Text = "0.0W",
+                FontSize = 10,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = theme.TextPrimary,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                TextAlignment = TextAlignment.Right,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetRow(_tbPcWatts, 0);
+            Grid.SetColumn(_tbPcWatts, 1);
+            grid.Children.Add(_tbPcWatts);
+
+            // Row 2: Progress bar (left) and state text (right)
+            var trackBat = new Border
+            {
+                Background = theme.ProgressBarTrack,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                Margin = new Thickness(0, 0, 6, 0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _rectBatteryFill = new Border
+            {
+                Background = theme.AccentBlue,
+                CornerRadius = new CornerRadius(1.75),
+                Height = 3.5,
+                Width = 20,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            trackBat.Child = _rectBatteryFill;
+            Grid.SetRow(trackBat, 2);
+            Grid.SetColumn(trackBat, 0);
+            grid.Children.Add(trackBat);
+
+            _tbWatts = new TextBlock
+            {
+                Text = "市电",
+                FontSize = 10,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = theme.AccentEmerald,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                TextAlignment = TextAlignment.Right,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetRow(_tbWatts, 2);
+            Grid.SetColumn(_tbWatts, 1);
+            grid.Children.Add(_tbWatts);
+
+            tile.Child = grid;
+            return tile;
+        }
+
+        private void SetupContextMenu()
+        {
             var menu = new ContextMenu();
             var miDetail = new MenuItem { Header = "展开 / 收起详情看板" };
             miDetail.Click += (s, e) => ToggleDetailWindow();
@@ -62,212 +449,51 @@ namespace SysMonitor.Linux.UI
             menu.Items.Add(new Separator());
             menu.Items.Add(miExit);
             ContextMenu = menu;
-
-            PointerPressed += (s, e) =>
-            {
-                if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-                {
-                    BeginMoveDrag(e);
-                }
-            };
-
-            DoubleTapped += (s, e) => ToggleDetailWindow();
-
-            LinuxTheme.ThemeChanged += () =>
-            {
-                if (_rootPill != null)
-                {
-                    _rootPill.Background = LinuxTheme.Current.PillBg;
-                    _rootPill.BorderBrush = LinuxTheme.Current.BorderBrush;
-                }
-            };
-
-            Opened += (s, e) =>
-            {
-                var screen = Screens.Primary ?? Screens.All.FirstOrDefault();
-                if (screen != null)
-                {
-                    Position = new PixelPoint(screen.WorkingArea.X + screen.WorkingArea.Width - 140, screen.WorkingArea.Y + 70);
-                }
-
-                _detailWindow = new LinuxDetailWindow(this);
-
-                _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-                _timer.Tick += (ts, te) => RefreshTelemetry();
-                _timer.Start();
-                RefreshTelemetry();
-            };
         }
 
-        private void BuildUi()
+        // ==========================================
+        // 鼠标事件：实现 Windows 1:1 单击展开与拖拽
+        // ==========================================
+        private void OnPointerPressed(object sender, PointerPressedEventArgs e)
         {
-            var theme = LinuxTheme.Current;
+            if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            {
+                _pointerDownPos = e.GetPosition(this);
+                _isDragging = false;
+                e.Pointer.Capture(this);
+            }
+        }
 
-            _rootPill = new Border
+        private void OnPointerMoved(object sender, PointerEventArgs e)
+        {
+            if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && ReferenceEquals(e.Pointer.Captured, this))
             {
-                Background = theme.PillBg,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(1.2),
-                CornerRadius = new CornerRadius(12),
-                Padding = new Thickness(8, 7, 8, 7),
-                Width = 120,
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
+                Point currPos = e.GetPosition(this);
+                if (Math.Abs(currPos.X - _pointerDownPos.X) > 4 || Math.Abs(currPos.Y - _pointerDownPos.Y) > 4)
+                {
+                    _isDragging = true;
+                    e.Pointer.Capture(null);
+                    if (_detailWindow != null && _detailWindow.IsVisible)
+                    {
+                        _detailWindow.Hide();
+                    }
+                    BeginMoveDrag(e);
+                }
+            }
+        }
 
-            var spMain = new StackPanel { Spacing = 5 };
+        private void OnPointerReleased(object sender, PointerReleasedEventArgs e)
+        {
+            if (ReferenceEquals(e.Pointer.Captured, this))
+            {
+                e.Pointer.Capture(null);
+            }
 
-            // 1. Header (Icon + Title)
-            var spHead = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center };
-            var tbIcon = new TextBlock
+            if (!_isDragging)
             {
-                Text = "❖",
-                FontSize = 11,
-                Foreground = theme.AccentBlue,
-                FontWeight = FontWeight.Bold
-            };
-            var tbTitle = new TextBlock
-            {
-                Text = "SYSMONITOR",
-                FontSize = 9.5,
-                FontWeight = FontWeight.Bold,
-                Foreground = theme.TextPrimary,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            spHead.Children.Add(tbIcon);
-            spHead.Children.Add(tbTitle);
-            spMain.Children.Add(spHead);
-
-            // 2. CPU Module
-            var spCpu = new StackPanel { Spacing = 1 };
-            var gridCpuTop = new Grid();
-            gridCpuTop.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gridCpuTop.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            var lblCpu = LinuxTheme.CreateMuted("CPU", 8.5);
-            Grid.SetColumn(lblCpu, 0);
-            _tbCpuVal = new TextBlock
-            {
-                Text = "0.0%",
-                FontSize = 9.5,
-                FontWeight = FontWeight.SemiBold,
-                Foreground = theme.AccentBlue,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
-            Grid.SetColumn(_tbCpuVal, 1);
-            gridCpuTop.Children.Add(lblCpu);
-            gridCpuTop.Children.Add(_tbCpuVal);
-            spCpu.Children.Add(gridCpuTop);
-
-            var barCpuBg = new Border
-            {
-                Background = theme.BorderMuted,
-                CornerRadius = new CornerRadius(1.5),
-                Height = 3,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            _barCpuFill = new Border
-            {
-                Background = theme.AccentBlue,
-                CornerRadius = new CornerRadius(1.5),
-                Height = 3,
-                Width = 0,
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            barCpuBg.Child = _barCpuFill;
-            spCpu.Children.Add(barCpuBg);
-            spMain.Children.Add(spCpu);
-
-            // 3. RAM Module
-            var spRam = new StackPanel { Spacing = 1 };
-            var gridRamTop = new Grid();
-            gridRamTop.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gridRamTop.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            var lblRam = LinuxTheme.CreateMuted("RAM", 8.5);
-            Grid.SetColumn(lblRam, 0);
-            _tbRamVal = new TextBlock
-            {
-                Text = "0%",
-                FontSize = 9.5,
-                FontWeight = FontWeight.SemiBold,
-                Foreground = theme.AccentEmerald,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
-            Grid.SetColumn(_tbRamVal, 1);
-            gridRamTop.Children.Add(lblRam);
-            gridRamTop.Children.Add(_tbRamVal);
-            spRam.Children.Add(gridRamTop);
-
-            var barRamBg = new Border
-            {
-                Background = theme.BorderMuted,
-                CornerRadius = new CornerRadius(1.5),
-                Height = 3,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            _barRamFill = new Border
-            {
-                Background = theme.AccentEmerald,
-                CornerRadius = new CornerRadius(1.5),
-                Height = 3,
-                Width = 0,
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            barRamBg.Child = _barRamFill;
-            spRam.Children.Add(barRamBg);
-            spMain.Children.Add(spRam);
-
-            // 4. NET Module
-            var spNet = new StackPanel { Spacing = 1 };
-            _tbNetDown = new TextBlock
-            {
-                Text = "↓ 0 K/s",
-                FontSize = 9,
-                FontWeight = FontWeight.Medium,
-                Foreground = theme.AccentBlue
-            };
-            _tbNetUp = new TextBlock
-            {
-                Text = "↑ 0 K/s",
-                FontSize = 9,
-                FontWeight = FontWeight.Medium,
-                Foreground = theme.AccentEmerald
-            };
-            spNet.Children.Add(_tbNetDown);
-            spNet.Children.Add(_tbNetUp);
-            spMain.Children.Add(spNet);
-
-            // 5. Power Module
-            _tbPower = new TextBlock
-            {
-                Text = "⚡ 100%",
-                FontSize = 9,
-                FontWeight = FontWeight.Medium,
-                Foreground = theme.AccentAmber
-            };
-            spMain.Children.Add(_tbPower);
-
-            // 6. ZeroTier Module
-            var spZt = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
-            _dotZt = new Border
-            {
-                Width = 6,
-                Height = 6,
-                CornerRadius = new CornerRadius(3),
-                Background = theme.AccentEmerald,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            _tbZtText = new TextBlock
-            {
-                Text = "ZT --",
-                FontSize = 9,
-                Foreground = theme.TextSecondary,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            spZt.Children.Add(_dotZt);
-            spZt.Children.Add(_tbZtText);
-            spMain.Children.Add(spZt);
-
-            _rootPill.Child = spMain;
-            Content = _rootPill;
+                ToggleDetailWindow();
+            }
+            _isDragging = false;
         }
 
         public void ToggleDetailWindow()
@@ -279,12 +505,12 @@ namespace SysMonitor.Linux.UI
             }
             else
             {
-                int targetX = Position.X - (int)_detailWindow.Width - 10;
-                if (targetX < 10)
+                // 若刚刚因失焦而隐藏（例如点击首页微件收起），防抖 350ms 避免重复触发重开
+                if ((DateTime.UtcNow - _detailWindow.LastDeactivatedTime).TotalMilliseconds < 350)
                 {
-                    targetX = Position.X + 130;
+                    return;
                 }
-                _detailWindow.Position = new PixelPoint(targetX, Position.Y);
+                _detailWindow.PositionNear(Position.X, Position.Y, (int)Width, (int)Bounds.Height);
                 _detailWindow.Show();
                 _detailWindow.Activate();
             }
@@ -304,46 +530,63 @@ namespace SysMonitor.Linux.UI
                 {
                     var theme = LinuxTheme.Current;
 
-                    // CPU
-                    _tbCpuVal.Text = string.Format("{0:F1}%", cpu);
-                    double cpuBarWidth = Math.Max(0, Math.Min(104, (cpu / 100.0) * 104));
-                    _barCpuFill.Width = cpuBarWidth;
+                    // 1. CPU & RAM
+                    _tbComputeCpuVal.Text = string.Format("{0:F1}%", cpu);
+                    double cpuBarWidth = Math.Max(0, Math.Min(48, (cpu / 100.0) * 48));
+                    _rectComputeCpuBar.Width = cpuBarWidth;
 
-                    // RAM
-                    _tbRamVal.Text = string.Format("{0:F1}G ({1}%)", mem.UsedGB, mem.UsagePercent);
-                    double ramBarWidth = Math.Max(0, Math.Min(104, (mem.UsagePercent / 100.0) * 104));
-                    _barRamFill.Width = ramBarWidth;
+                    _tbComputeRamVal.Text = string.Format("{0}%", mem.UsagePercent);
+                    double ramBarWidth = Math.Max(0, Math.Min(48, (mem.UsagePercent / 100.0) * 48));
+                    _rectComputeRamBar.Width = ramBarWidth;
 
-                    // NET
-                    _tbNetDown.Text = string.Format("↓ {0}", FormatRate(net.DownloadKBps));
-                    _tbNetUp.Text = string.Format("↑ {0}", FormatRate(net.UploadKBps));
+                    // 2. Network
+                    string downFmt = FormatCompactRate(net.DownloadKBps);
+                    string upFmt = FormatCompactRate(net.UploadKBps);
+                    _tbNetRates.Text = string.Format("↓ {0}   ↑ {1}", downFmt, upFmt);
 
-                    // PWR
-                    if (bat.IsPluggedIn || bat.IsCharging)
-                    {
-                        _tbPower.Text = string.Format("⚡ {0}% {1:F1}W", bat.Percent, bat.RateWatts);
-                        _tbPower.Foreground = theme.AccentAmber;
-                    }
-                    else
-                    {
-                        _tbPower.Text = string.Format("🔋 {0}%", bat.Percent);
-                        _tbPower.Foreground = bat.Percent < 20 ? theme.AccentRed : theme.AccentEmerald;
-                    }
-
-                    // ZeroTier
+                    // 3. ZeroTier
                     if (zt.IsRunning)
                     {
-                        _dotZt.Background = zt.MoonCount > 0 ? theme.AccentEmerald : theme.AccentBlue;
-                        string pingStr = zt.MinMoonLatency > 0 ? (zt.MinMoonLatency + "ms") : "直连";
-                        _tbZtText.Text = string.Format("ZT {0}", pingStr);
+                        _elTile3Dot.Background = theme.AccentEmerald;
+                        _tbTile3Title.Text = zt.MoonCount > 0 ? "Moon" : "ZeroTier";
+                        _tbTile3Status.Text = zt.MoonCount > 0
+                            ? (zt.MinMoonLatency >= 0 ? (zt.MinMoonLatency + "ms") : "直连")
+                            : "PLANET";
+                        _tbTile3Status.Foreground = theme.AccentEmerald;
+                        _tbTile3Sub.Text = !string.IsNullOrEmpty(zt.NodeId) ? ("Node: " + zt.NodeId) : "ZeroTier";
                     }
                     else
                     {
-                        _dotZt.Background = theme.TextMuted;
-                        _tbZtText.Text = "ZT 未运行";
+                        _elTile3Dot.Background = theme.TextMuted;
+                        _tbTile3Title.Text = "ZeroTier";
+                        _tbTile3Status.Text = "未运行";
+                        _tbTile3Status.Foreground = theme.TextMuted;
+                        _tbTile3Sub.Text = "守护进程离线";
                     }
 
-                    // 同步刷新详情页（若展开）
+                    // 4. Power
+                    _tbBatteryPercent.Text = string.Format("{0}%", bat.Percent);
+                    _tbPcWatts.Text = bat.RateWatts > 0 ? string.Format("{0:F1}W", bat.RateWatts) : "0.0W";
+                    double batFillWidth = Math.Max(2, Math.Min(48, (bat.Percent / 100.0) * 48));
+                    _rectBatteryFill.Width = batFillWidth;
+
+                    if (bat.IsCharging)
+                    {
+                        _tbWatts.Text = "正在充电";
+                        _tbWatts.Foreground = theme.AccentAmber;
+                    }
+                    else if (bat.IsPluggedIn)
+                    {
+                        _tbWatts.Text = "市电供电";
+                        _tbWatts.Foreground = theme.AccentEmerald;
+                    }
+                    else
+                    {
+                        _tbWatts.Text = "放电中";
+                        _tbWatts.Foreground = bat.Percent < 20 ? theme.AccentRed : theme.TextSecondary;
+                    }
+
+                    // 同步刷新展开中的详情页
                     if (_detailWindow != null && _detailWindow.IsVisible)
                     {
                         _detailWindow.UpdateTelemetry(cpu, mem, net, bat, zt);
@@ -353,11 +596,11 @@ namespace SysMonitor.Linux.UI
             catch { }
         }
 
-        private static string FormatRate(double kbps)
+        private static string FormatCompactRate(double kbps)
         {
             if (kbps >= 1024)
-                return string.Format("{0:F1} MB/s", kbps / 1024.0);
-            return string.Format("{0:F0} KB/s", kbps);
+                return string.Format("{0:F1}M", kbps / 1024.0);
+            return string.Format("{0:F0}K", kbps);
         }
     }
 }

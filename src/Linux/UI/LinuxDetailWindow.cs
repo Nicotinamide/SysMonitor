@@ -36,6 +36,8 @@ namespace SysMonitor.Linux.UI
         private TextBlock _tbZtStatus;
         private TextBlock _tbZtMoon;
 
+        public DateTime LastDeactivatedTime { get; private set; }
+
         public LinuxDetailWindow(LinuxFloatingWindow parentFloat)
         {
             _parentFloat = parentFloat;
@@ -47,12 +49,16 @@ namespace SysMonitor.Linux.UI
             Topmost = true;
             ShowInTaskbar = false;
             CanResize = false;
-            Width = 360;
+            Width = 385;
             MaxHeight = 620;
             SizeToContent = SizeToContent.Height;
 
-            // 失焦自动隐藏收起
-            Deactivated += (s, e) => this.Hide();
+            // 失焦自动隐藏收起，并记录失焦时间用于点击防抖
+            Deactivated += (s, e) =>
+            {
+                LastDeactivatedTime = DateTime.UtcNow;
+                this.Hide();
+            };
 
             BuildUi();
 
@@ -287,7 +293,7 @@ namespace SysMonitor.Linux.UI
             spSet.Children.Add(btnThemeToggle);
 
             // Version info
-            var tbVer = LinuxTheme.CreateMuted("当前版本: v1.0.4 (Linux Native)", 10);
+            var tbVer = LinuxTheme.CreateMuted("当前版本: v1.0.5 (Linux Native)", 10);
             spSet.Children.Add(tbVer);
 
             // GitHub link button
@@ -348,6 +354,48 @@ namespace SysMonitor.Linux.UI
             {
                 _overlaySettings.IsVisible = !_overlaySettings.IsVisible;
             }
+        }
+
+        public void PositionNear(int left, int top, int width, int height)
+        {
+            var screen = Screens.Primary ?? Screens.All.FirstOrDefault();
+            if (screen == null)
+            {
+                Position = new PixelPoint(left - 385 - 8, top);
+                return;
+            }
+
+            var wa = screen.WorkingArea;
+            int detailW = 385;
+            int detailH = (int)Bounds.Height > 0 ? (int)Bounds.Height : 480;
+
+            int targetLeft;
+            if (left + width + detailW + 10 <= wa.X + wa.Width)
+            {
+                targetLeft = left + width + 8;
+            }
+            else
+            {
+                targetLeft = left - detailW - 8;
+            }
+
+            if (targetLeft < wa.X + 8) targetLeft = wa.X + 8;
+            if (targetLeft + detailW > wa.X + wa.Width - 8) targetLeft = wa.X + wa.Width - detailW - 8;
+
+            int targetTop;
+            if ((top + height / 2.0) > (wa.Y + wa.Height / 2.0))
+            {
+                targetTop = (top + height) - detailH;
+            }
+            else
+            {
+                targetTop = top;
+            }
+
+            if (targetTop + detailH > wa.Y + wa.Height - 8) targetTop = wa.Y + wa.Height - detailH - 8;
+            if (targetTop < wa.Y + 8) targetTop = wa.Y + 8;
+
+            Position = new PixelPoint(targetLeft, targetTop);
         }
 
         public void UpdateTelemetry(double cpu, MemorySnapshot mem, NetworkRateSnapshot net, BatterySnapshot bat, ZeroTierLocalSnapshot zt)
