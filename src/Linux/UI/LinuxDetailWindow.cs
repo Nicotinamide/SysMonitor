@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using Avalonia;
@@ -15,41 +16,80 @@ namespace SysMonitor.Linux.UI
     {
         private LinuxFloatingWindow _parentFloat;
 
-        // UI References
+        // Root & Container
         private Border _rootBorder;
-        private StackPanel _spContent;
+        private StackPanel _cardsStack;
+        private ScrollViewer _svRoot;
         private Border _overlaySettings;
+        private Border _bToast;
+        private TextBlock _tbToast;
+        private DispatcherTimer _toastTimer;
 
-        // Card CPU/RAM
+        // Card 1: CPU & RAM
         private TextBlock _tbCpuVal;
-        private Border _barCpuFill;
+        private Border _rectCpuBar;
+        private TextBlock _tbRamPercent;
         private TextBlock _tbRamVal;
-        private Border _barRamFill;
+        private Border _rectRamBar;
 
-        // Card PWR
-        private TextBlock _tbPwrStatus;
-        private TextBlock _tbPwrWatts;
+        // Card 2: Power
+        private Border _bPowerBadge;
+        private TextBlock _tbPowerBadge;
+        private TextBlock _tbPowerPcWatts;
+        private TextBlock _tbPowerBatWatts;
+        private TextBlock _tbPowerBatLevel;
+        private TextBlock _tbPowerBatEta;
 
-        // Card NET
-        private TextBlock _tbNetDown;
-        private TextBlock _tbNetUp;
+        // Card 3: Network
+        private TextBlock _tbNetIface;
+        private TextBlock _tbNetLinkSpeed;
+        private TextBlock _tbNetLocalIp;
+        private TextBlock _tbNetSessionTraffic;
+        private TextBlock _tbNetFlag;
+        private TextBlock _tbNetPublicIp;
+        private TextBlock _tbNetGeoIsp;
 
-        // Card ZT
+        // Card 4: ZeroTier
+        private Border _cardZt;
+        private Border _bZtBadge;
+        private TextBlock _tbZtBadge;
         private TextBlock _tbZtNode;
-        private TextBlock _tbZtStatus;
-        private TextBlock _tbZtMoon;
+        private StackPanel _spMoons;
 
-        // Update Controls
+        // Card 5: Member Directory
+        private Border _cardMember;
+        private LinuxMemberDirectoryEngine _memberDir;
+        private TextBlock _tbMemberStatus;
+        private Border _chipAll;
+        private TextBlock _tbChipAll;
+        private Border _chipOnline;
+        private TextBlock _tbChipOnline;
+        private Border _chipOffline;
+        private TextBlock _tbChipOffline;
+        private Button _btnToggleSearch;
+        private Border _searchBoxBorder;
+        private TextBox _tbMemberSearch;
+        private ScrollViewer _svMembers;
+        private StackPanel _spMemberResults;
+
+        private enum MemberFilterType { All, Online, Offline }
+        private MemberFilterType _currentMemberFilter = MemberFilterType.All;
+
+        // Settings Fields
+        private TextBox _txtSettingUrl;
+        private TextBox _txtSettingNwid;
+        private TextBox _txtSettingToken;
+        private TextBlock _lblTestStatus;
         private TextBlock _tbUpdateStatus;
         private Button _btnPullUpdate;
         private string _latestDownloadUrl;
 
-        // Cached Telemetry for Rebuild
-        private double _lastCpu = 0;
-        private MemorySnapshot _lastMem;
-        private NetworkRateSnapshot _lastNet;
-        private BatterySnapshot _lastBat;
-        private ZeroTierLocalSnapshot _lastZt;
+        // Cached Telemetry
+        private LinuxSystemLoadData _lastLoad;
+        private LinuxPowerData _lastPower;
+        private LinuxNetworkData _lastNet;
+        private LinuxZeroTierData _lastZt;
+        private List<LinuxMemberNode> _lastMemberList = new List<LinuxMemberNode>();
 
         public DateTime LastDeactivatedTime { get; private set; }
 
@@ -65,15 +105,26 @@ namespace SysMonitor.Linux.UI
             ShowInTaskbar = false;
             CanResize = false;
             Width = 385;
-            MaxHeight = 620;
+            MaxHeight = 650;
             SizeToContent = SizeToContent.Height;
 
-            // 失焦自动隐藏收起，并记录失焦时间用于点击防抖
             Deactivated += (s, e) =>
             {
                 LastDeactivatedTime = DateTime.UtcNow;
                 this.Hide();
             };
+
+            _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+            _toastTimer.Tick += (s, e) =>
+            {
+                _toastTimer.Stop();
+                if (_bToast != null) _bToast.IsVisible = false;
+            };
+
+            _memberDir = new LinuxMemberDirectoryEngine();
+            _memberDir.StatusChanged += (st) => Dispatcher.UIThread.Post(() => OnMemberStatusChanged(st));
+            _memberDir.MembersUpdated += (list) => Dispatcher.UIThread.Post(() => OnMembersUpdated(list));
+            _memberDir.ConfigChanged += () => Dispatcher.UIThread.Post(() => UpdateZeroTierCardsVisibility());
 
             BuildUi();
 
@@ -83,18 +134,31 @@ namespace SysMonitor.Linux.UI
             };
         }
 
+        public void FocusSearch()
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                ExpandSearchBox();
+            });
+        }
+
         public void RebuildUi()
         {
-            bool wasSettingsVisible = _overlaySettings != null && _overlaySettings.IsVisible;
+            bool wasSettingsOpen = _overlaySettings != null && _overlaySettings.IsVisible;
+            bool wasSearchOpen = _searchBoxBorder != null && _searchBoxBorder.IsVisible;
+            string prevSearch = _tbMemberSearch?.Text ?? "";
+
             BuildUi();
-            if (_overlaySettings != null)
+
+            if (wasSettingsOpen && _overlaySettings != null) _overlaySettings.IsVisible = true;
+            if (wasSearchOpen && _searchBoxBorder != null)
             {
-                _overlaySettings.IsVisible = wasSettingsVisible;
+                _searchBoxBorder.IsVisible = true;
+                if (_btnToggleSearch != null) _btnToggleSearch.Foreground = LinuxTheme.Current.AccentBlue;
             }
-            if (_lastMem != null)
-            {
-                UpdateTelemetry(_lastCpu, _lastMem, _lastNet, _lastBat, _lastZt);
-            }
+            if (!string.IsNullOrEmpty(prevSearch) && _tbMemberSearch != null) _tbMemberSearch.Text = prevSearch;
+
+            ReplayTelemetry();
         }
 
         private void BuildUi()
@@ -103,530 +167,1338 @@ namespace SysMonitor.Linux.UI
 
             _rootBorder = new Border
             {
-                Background = theme.CardBg,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(1.2),
+                Width = 385,
                 CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(12, 10, 12, 12),
-                BoxShadow = BoxShadows.Parse("0 4 18 #32000000")
+                Background = theme.WindowBg,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(10, 8, 10, 8),
+                BoxShadow = BoxShadows.Parse(theme.IsDark ? "0 4 22 #50000000" : "0 4 22 #25000000")
             };
 
-            var gridRoot = new Grid();
+            var rootGrid = new Grid();
+            rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto)); // Row 0: Pinned Top Header
+            rootGrid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star)); // Row 1: Scrollable Cards Body
 
-            _spContent = new StackPanel { Spacing = 6 };
+            // 1. Pinned Header (Title, Tag, Settings, Close)
+            var headerGrid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
 
-            // 1. Title Header Bar
-            var gridHeader = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-            gridHeader.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gridHeader.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-
-            var spTitle = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+            var titleSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             var tbTitle = new TextBlock
             {
-                Text = "SysMonitor",
-                FontSize = 13,
-                FontWeight = FontWeight.Bold,
+                Text = "⚡ 系统遥测与网络",
                 Foreground = theme.TextPrimary,
+                FontSize = 12.5,
+                FontWeight = FontWeight.Bold,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            var chipSys = new Border
+            var sysChip = new Border
             {
-                Background = theme.InnerTileBg,
-                BorderBrush = theme.BorderMuted,
-                BorderThickness = new Thickness(1),
+                Background = theme.CardBg,
                 CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(5, 1),
+                Padding = new Thickness(5, 2, 5, 2),
+                Margin = new Thickness(8, 0, 0, 0),
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(0.6),
                 VerticalAlignment = VerticalAlignment.Center
             };
             var tbSys = new TextBlock
             {
                 Text = Environment.Is64BitOperatingSystem ? "LINUX 64-BIT" : "LINUX 32-BIT",
-                FontSize = 8.5,
+                FontSize = 9,
                 FontWeight = FontWeight.SemiBold,
                 Foreground = theme.TextSecondary
             };
-            chipSys.Child = tbSys;
-            spTitle.Children.Add(tbTitle);
-            spTitle.Children.Add(chipSys);
-            Grid.SetColumn(spTitle, 0);
-            gridHeader.Children.Add(spTitle);
+            sysChip.Child = tbSys;
+            titleSp.Children.Add(tbTitle);
+            titleSp.Children.Add(sysChip);
+            Grid.SetColumn(titleSp, 0);
+            headerGrid.Children.Add(titleSp);
 
-            var spTopBtns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
-            var btnSettings = LinuxTheme.CreateIconButton("⚙", "设置", () => ToggleSettings());
-            var btnClose = LinuxTheme.CreateIconButton("✕", "关闭", () => this.Hide());
-            spTopBtns.Children.Add(btnSettings);
-            spTopBtns.Children.Add(btnClose);
-            Grid.SetColumn(spTopBtns, 1);
-            gridHeader.Children.Add(spTopBtns);
-            _spContent.Children.Add(gridHeader);
+            var topBtns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+            var btnSettings = LinuxTheme.CreateIconButton("⚙", "设置", () => ToggleSettingsView(), 12);
+            var btnClose = LinuxTheme.CreateIconButton("✕", "关闭", () => this.Hide(), 11);
+            topBtns.Children.Add(btnSettings);
+            topBtns.Children.Add(btnClose);
+            Grid.SetColumn(topBtns, 1);
+            headerGrid.Children.Add(topBtns);
+            Grid.SetRow(headerGrid, 0);
+            rootGrid.Children.Add(headerGrid);
 
-            // 2. Card: CPU & RAM
-            var cardCpuRam = LinuxTheme.CreateCardBorder();
-            var spCpuRam = new StackPanel { Margin = new Thickness(10, 8), Spacing = 6 };
-            spCpuRam.Children.Add(LinuxTheme.CreateHeader("💻 CPU & 内存负载"));
+            // Container for all 5 cards
+            _cardsStack = new StackPanel { Spacing = 8 };
 
-            var gridLoad = new Grid();
-            gridLoad.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gridLoad.ColumnDefinitions.Add(new ColumnDefinition(10, GridUnitType.Pixel));
-            gridLoad.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            // Card 1: 💻 核心计算负载
+            _cardsStack.Children.Add(BuildLoadCard(theme));
 
-            // CPU
-            var spCpu = new StackPanel { Spacing = 3 };
-            var gCpuTop = new Grid();
-            gCpuTop.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gCpuTop.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            var lCpu = LinuxTheme.CreateMuted("CPU 使用率");
-            Grid.SetColumn(lCpu, 0);
-            _tbCpuVal = new TextBlock { Text = "0.0%", FontSize = 11, FontWeight = FontWeight.Bold, Foreground = theme.AccentBlue, HorizontalAlignment = HorizontalAlignment.Right };
-            Grid.SetColumn(_tbCpuVal, 1);
-            gCpuTop.Children.Add(lCpu);
-            gCpuTop.Children.Add(_tbCpuVal);
-            spCpu.Children.Add(gCpuTop);
+            // Card 2: 🔋 供电与续航
+            _cardsStack.Children.Add(BuildPowerCard(theme));
 
-            var bCpuBg = new Border { Background = theme.BorderMuted, CornerRadius = new CornerRadius(2), Height = 4, HorizontalAlignment = HorizontalAlignment.Stretch };
-            _barCpuFill = new Border { Background = theme.AccentBlue, CornerRadius = new CornerRadius(2), Height = 4, Width = 0, HorizontalAlignment = HorizontalAlignment.Left };
-            bCpuBg.Child = _barCpuFill;
-            spCpu.Children.Add(bCpuBg);
-            Grid.SetColumn(spCpu, 0);
-            gridLoad.Children.Add(spCpu);
+            // Card 3: 🌐 物理网卡与流量
+            _cardsStack.Children.Add(BuildNetworkCard(theme));
 
-            // RAM
-            var spRam = new StackPanel { Spacing = 3 };
-            var gRamTop = new Grid();
-            gRamTop.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gRamTop.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            var lRam = LinuxTheme.CreateMuted("物理内存");
-            Grid.SetColumn(lRam, 0);
-            _tbRamVal = new TextBlock { Text = "0G (0%)", FontSize = 11, FontWeight = FontWeight.Bold, Foreground = theme.AccentEmerald, HorizontalAlignment = HorizontalAlignment.Right };
-            Grid.SetColumn(_tbRamVal, 1);
-            gRamTop.Children.Add(lRam);
-            gRamTop.Children.Add(_tbRamVal);
-            spRam.Children.Add(gRamTop);
+            // Card 4: 🔗 ZeroTier 虚拟局域网
+            _cardZt = BuildZeroTierCard(theme);
+            _cardsStack.Children.Add(_cardZt);
 
-            var bRamBg = new Border { Background = theme.BorderMuted, CornerRadius = new CornerRadius(2), Height = 4, HorizontalAlignment = HorizontalAlignment.Stretch };
-            _barRamFill = new Border { Background = theme.AccentEmerald, CornerRadius = new CornerRadius(2), Height = 4, Width = 0, HorizontalAlignment = HorizontalAlignment.Left };
-            bRamBg.Child = _barRamFill;
-            spRam.Children.Add(bRamBg);
-            Grid.SetColumn(spRam, 2);
-            gridLoad.Children.Add(spRam);
+            // Card 5: 👥 成员设备
+            _cardMember = BuildMemberCard(theme);
+            _cardsStack.Children.Add(_cardMember);
 
-            spCpuRam.Children.Add(gridLoad);
-            cardCpuRam.Child = spCpuRam;
-            _spContent.Children.Add(cardCpuRam);
+            // ScrollViewer for cards
+            _svRoot = new ScrollViewer
+            {
+                MaxHeight = 560,
+                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                Content = _cardsStack
+            };
+            Grid.SetRow(_svRoot, 1);
+            rootGrid.Children.Add(_svRoot);
 
-            // 3. Card: Power & Battery
-            var cardPwr = LinuxTheme.CreateCardBorder();
-            var spPwr = new StackPanel { Margin = new Thickness(10, 8), Spacing = 4 };
-            spPwr.Children.Add(LinuxTheme.CreateHeader("⚡ 供电与电池状态"));
-            var gPwr = new Grid();
-            gPwr.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gPwr.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            _tbPwrStatus = new TextBlock { Text = "正在充电 (100%)", FontSize = 10, Foreground = theme.TextPrimary, FontWeight = FontWeight.Medium };
-            Grid.SetColumn(_tbPwrStatus, 0);
-            _tbPwrWatts = new TextBlock { Text = "0.0 W", FontSize = 10, Foreground = theme.AccentAmber, FontWeight = FontWeight.Bold };
-            Grid.SetColumn(_tbPwrWatts, 1);
-            gPwr.Children.Add(_tbPwrStatus);
-            gPwr.Children.Add(_tbPwrWatts);
-            spPwr.Children.Add(gPwr);
-            cardPwr.Child = spPwr;
-            _spContent.Children.Add(cardPwr);
+            // Settings Overlay (Floating on top of cards)
+            _overlaySettings = BuildSettingsOverlay(theme);
+            Grid.SetRow(_overlaySettings, 1);
+            rootGrid.Children.Add(_overlaySettings);
 
-            // 4. Card: Network Throughput
-            var cardNet = LinuxTheme.CreateCardBorder();
-            var spNet = new StackPanel { Margin = new Thickness(10, 8), Spacing = 4 };
-            spNet.Children.Add(LinuxTheme.CreateHeader("🌐 实时网络吞吐"));
-            var gNet = new Grid();
-            gNet.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gNet.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            _tbNetDown = new TextBlock { Text = "↓ 下载: 0 KB/s", FontSize = 10, Foreground = theme.AccentBlue, FontWeight = FontWeight.Medium };
-            Grid.SetColumn(_tbNetDown, 0);
-            _tbNetUp = new TextBlock { Text = "↑ 上传: 0 KB/s", FontSize = 10, Foreground = theme.AccentEmerald, FontWeight = FontWeight.Medium };
-            Grid.SetColumn(_tbNetUp, 1);
-            gNet.Children.Add(_tbNetDown);
-            gNet.Children.Add(_tbNetUp);
-            spNet.Children.Add(gNet);
-            cardNet.Child = spNet;
-            _spContent.Children.Add(cardNet);
+            // Toast Popup at bottom
+            _bToast = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(230, 16, 185, 129)),
+                BorderBrush = theme.AccentEmerald,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12, 6, 12, 6),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 0, 16),
+                IsVisible = false
+            };
+            _tbToast = new TextBlock
+            {
+                Text = "",
+                FontSize = 10.5,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = Brushes.White
+            };
+            _bToast.Child = _tbToast;
+            Grid.SetRow(_bToast, 1);
+            rootGrid.Children.Add(_bToast);
 
-            // 5. Card: ZeroTier & Moon
-            var cardZt = LinuxTheme.CreateCardBorder();
-            var spZt = new StackPanel { Margin = new Thickness(10, 8), Spacing = 4 };
-            spZt.Children.Add(LinuxTheme.CreateHeader("🔗 ZeroTier 虚拟局域网 & Moon 列表"));
-            _tbZtNode = LinuxTheme.CreateMuted("本地节点: 探测中...");
-            _tbZtStatus = new TextBlock { Text = "客户端状态: 未连接", FontSize = 10, Foreground = theme.TextSecondary };
-            _tbZtMoon = new TextBlock { Text = "Moon 节点: 直连或中继探测中", FontSize = 10, Foreground = theme.AccentEmerald, FontWeight = FontWeight.Medium };
-            spZt.Children.Add(_tbZtNode);
-            spZt.Children.Add(_tbZtStatus);
-            spZt.Children.Add(_tbZtMoon);
-            cardZt.Child = spZt;
-            _spContent.Children.Add(cardZt);
+            UpdateZeroTierCardsVisibility();
 
-            gridRoot.Children.Add(_spContent);
-
-            // 6. Settings Overlay
-            BuildSettingsOverlay(gridRoot);
-
-            _rootBorder.Child = gridRoot;
+            _rootBorder.Child = rootGrid;
             Content = _rootBorder;
         }
 
-        private void BuildSettingsOverlay(Grid gridRoot)
+        // ==========================================
+        // Card 1: 💻 核心计算负载
+        // ==========================================
+        private Border BuildLoadCard(LinuxThemePalette theme)
+        {
+            var card = LinuxTheme.CreateCardBorder();
+            var sp = new StackPanel { Margin = new Thickness(10, 8, 10, 8) };
+            sp.Children.Add(LinuxTheme.CreateCardHeader("💻 核心计算负载"));
+
+            var grid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            grid.ColumnDefinitions.Add(new ColumnDefinition(10, GridUnitType.Pixel)); // gap
+            grid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
+            // CPU Col
+            var spCpu = new StackPanel();
+            var gCpuTop = new Grid();
+            gCpuTop.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            gCpuTop.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            var lblCpu = LinuxTheme.CreateMutedText("CPU 使用率");
+            Grid.SetColumn(lblCpu, 0);
+            _tbCpuVal = new TextBlock
+            {
+                Text = "0.0%",
+                FontSize = 12,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentBlue,
+                FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI")
+            };
+            Grid.SetColumn(_tbCpuVal, 1);
+            gCpuTop.Children.Add(lblCpu);
+            gCpuTop.Children.Add(_tbCpuVal);
+            spCpu.Children.Add(gCpuTop);
+
+            var trackCpu = LinuxTheme.CreateProgressBar(out _rectCpuBar, theme.AccentBlue);
+            spCpu.Children.Add(trackCpu);
+            Grid.SetColumn(spCpu, 0);
+            grid.Children.Add(spCpu);
+
+            // RAM Col
+            var spRam = new StackPanel();
+            var gRamTop = new Grid();
+            gRamTop.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            gRamTop.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            _tbRamPercent = LinuxTheme.CreateMutedText("物理内存 0%");
+            Grid.SetColumn(_tbRamPercent, 0);
+            _tbRamVal = new TextBlock
+            {
+                Text = "-- / -- GB",
+                FontSize = 11,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentEmerald,
+                FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI")
+            };
+            Grid.SetColumn(_tbRamVal, 1);
+            gRamTop.Children.Add(_tbRamPercent);
+            gRamTop.Children.Add(_tbRamVal);
+            spRam.Children.Add(gRamTop);
+
+            var trackRam = LinuxTheme.CreateProgressBar(out _rectRamBar, theme.AccentEmerald);
+            spRam.Children.Add(trackRam);
+            Grid.SetColumn(spRam, 2);
+            grid.Children.Add(spRam);
+
+            sp.Children.Add(grid);
+            card.Child = sp;
+            return card;
+        }
+
+        // ==========================================
+        // Card 2: 🔋 供电与续航
+        // ==========================================
+        private Border BuildPowerCard(LinuxThemePalette theme)
+        {
+            var card = LinuxTheme.CreateCardBorder();
+            var sp = new StackPanel { Margin = new Thickness(10, 8, 10, 8) };
+
+            var headGrid = new Grid();
+            headGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            headGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var lblHead = LinuxTheme.CreateCardHeader("🔋 供电与续航");
+            Grid.SetColumn(lblHead, 0);
+            headGrid.Children.Add(lblHead);
+
+            _tbPowerBadge = new TextBlock { Text = "已充满", FontSize = 9.5, FontWeight = FontWeight.Bold, Foreground = theme.AccentEmerald };
+            _bPowerBadge = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(35, 5, 150, 105)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 5, 150, 105)),
+                BorderThickness = new Thickness(0.8),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 1.5, 6, 1.5),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = _tbPowerBadge
+            };
+            Grid.SetColumn(_bPowerBadge, 1);
+            headGrid.Children.Add(_bPowerBadge);
+            sp.Children.Add(headGrid);
+
+            // Row 0: 电脑功耗 | 电池功率
+            _tbPowerPcWatts = LinuxTheme.CreateValueText("--");
+            _tbPowerBatWatts = LinuxTheme.CreateValueText("--");
+            sp.Children.Add(CreateMetricsRow(theme, "电脑功耗:", _tbPowerPcWatts, "电池功率:", _tbPowerBatWatts));
+
+            // Row 1: 电池电量 | 预估续航
+            _tbPowerBatLevel = LinuxTheme.CreateValueText("--");
+            _tbPowerBatEta = LinuxTheme.CreateValueText("--");
+            sp.Children.Add(CreateMetricsRow(theme, "电池电量:", _tbPowerBatLevel, "预估续航:", _tbPowerBatEta));
+
+            card.Child = sp;
+            return card;
+        }
+
+        // ==========================================
+        // Card 3: 🌐 物理网卡与流量
+        // ==========================================
+        private Border BuildNetworkCard(LinuxThemePalette theme)
+        {
+            var card = LinuxTheme.CreateCardBorder();
+            var sp = new StackPanel { Margin = new Thickness(10, 8, 10, 8) };
+            sp.Children.Add(LinuxTheme.CreateCardHeader("🌐 物理网卡与流量"));
+
+            _tbNetIface = LinuxTheme.CreateValueText("eth0");
+            _tbNetLinkSpeed = LinuxTheme.CreateValueText("--");
+            _tbNetLocalIp = LinuxTheme.CreateValueText("127.0.0.1");
+            _tbNetSessionTraffic = LinuxTheme.CreateValueText("↓ 0MB  ↑ 0MB");
+
+            sp.Children.Add(CreateMetricsGrid(theme,
+                "活动网卡:", _tbNetIface,
+                "物理协商:", _tbNetLinkSpeed,
+                "局域网 IP:", _tbNetLocalIp,
+                "本次流量:", _tbNetSessionTraffic));
+
+            // Highlighted Public IP Box
+            var ipBox = LinuxTheme.CreateInnerBorder();
+            ipBox.Padding = new Thickness(8, 6, 8, 6);
+            ipBox.Margin = new Thickness(0, 6, 0, 2);
+
+            var ipSp = new StackPanel();
+            var ipRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var lblPub = LinuxTheme.CreateMutedText("公网出口与归属: ");
+            lblPub.Margin = new Thickness(0, 0, 6, 0);
+            ipRow.Children.Add(lblPub);
+
+            _tbNetFlag = new TextBlock { Text = "🌐", FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
+            _tbNetPublicIp = new TextBlock
+            {
+                Text = "获取中...",
+                FontSize = 12,
+                FontWeight = FontWeight.Bold,
+                Foreground = theme.AccentBlue,
+                FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI"),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            ipRow.Children.Add(_tbNetFlag);
+            ipRow.Children.Add(_tbNetPublicIp);
+            ipSp.Children.Add(ipRow);
+
+            _tbNetGeoIsp = new TextBlock
+            {
+                Text = "获取中...",
+                FontSize = 10,
+                Foreground = theme.TextSecondary,
+                Margin = new Thickness(0, 3, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            ipSp.Children.Add(_tbNetGeoIsp);
+            ipBox.Child = ipSp;
+            sp.Children.Add(ipBox);
+
+            card.Child = sp;
+            return card;
+        }
+
+        // ==========================================
+        // Card 4: 🔗 ZeroTier 虚拟局域网
+        // ==========================================
+        private Border BuildZeroTierCard(LinuxThemePalette theme)
+        {
+            var card = LinuxTheme.CreateCardBorder();
+            var sp = new StackPanel { Margin = new Thickness(10, 8, 10, 8) };
+
+            var zHead = new Grid();
+            zHead.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            zHead.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var lblZt = LinuxTheme.CreateCardHeader("🔗 ZeroTier 虚拟局域网");
+            Grid.SetColumn(lblZt, 0);
+            zHead.Children.Add(lblZt);
+
+            _tbZtBadge = new TextBlock { Text = "已连入", FontSize = 9.5, FontWeight = FontWeight.Bold, Foreground = theme.AccentEmerald };
+            _bZtBadge = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(35, 5, 150, 105)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 5, 150, 105)),
+                BorderThickness = new Thickness(0.8),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 1.5, 6, 1.5),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = _tbZtBadge
+            };
+            Grid.SetColumn(_bZtBadge, 1);
+            zHead.Children.Add(_bZtBadge);
+            sp.Children.Add(zHead);
+
+            _tbZtNode = LinuxTheme.CreateValueText("--");
+            var nodeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 4) };
+            var nodeLabel = LinuxTheme.CreateMutedText("本地节点 ID: ");
+            nodeLabel.Margin = new Thickness(0, 0, 6, 0);
+            nodeRow.Children.Add(nodeLabel);
+            nodeRow.Children.Add(_tbZtNode);
+            sp.Children.Add(nodeRow);
+
+            _spMoons = new StackPanel { Spacing = 4 };
+            sp.Children.Add(_spMoons);
+
+            card.Child = sp;
+            return card;
+        }
+
+        // ==========================================
+        // Card 5: 👥 成员设备
+        // ==========================================
+        private Border BuildMemberCard(LinuxThemePalette theme)
+        {
+            var card = LinuxTheme.CreateCardBorder();
+            var sp = new StackPanel { Margin = new Thickness(10, 8, 10, 8) };
+
+            var mHead = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            mHead.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            mHead.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var lblMemberHead = LinuxTheme.CreateCardHeader("👥 成员设备");
+            Grid.SetColumn(lblMemberHead, 0);
+            mHead.Children.Add(lblMemberHead);
+
+            var spHeadRight = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Spacing = 3 };
+
+            _tbMemberStatus = new TextBlock
+            {
+                Text = _memberDir.GetCurrentStatusText(),
+                FontSize = 10,
+                FontWeight = FontWeight.Medium,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0)
+            };
+            spHeadRight.Children.Add(_tbMemberStatus);
+
+            // Filter Chips
+            _chipAll = CreateChipPill("全部 0", MemberFilterType.All, out _tbChipAll);
+            spHeadRight.Children.Add(_chipAll);
+
+            _chipOnline = CreateChipPill("🟢 0", MemberFilterType.Online, out _tbChipOnline);
+            spHeadRight.Children.Add(_chipOnline);
+
+            _chipOffline = CreateChipPill("⚪ 0", MemberFilterType.Offline, out _tbChipOffline);
+            spHeadRight.Children.Add(_chipOffline);
+
+            _btnToggleSearch = LinuxTheme.CreateIconButton("🔍", "切换搜索", () => ToggleSearchBox(), 11);
+            spHeadRight.Children.Add(_btnToggleSearch);
+
+            var btnRefresh = LinuxTheme.CreateIconButton("↻", "同步数据", () => _memberDir?.TriggerRefresh(), 12);
+            spHeadRight.Children.Add(btnRefresh);
+
+            Grid.SetColumn(spHeadRight, 1);
+            mHead.Children.Add(spHeadRight);
+            sp.Children.Add(mHead);
+
+            // Collapsible Search Box
+            _searchBoxBorder = LinuxTheme.CreateInnerBorder();
+            _searchBoxBorder.Padding = new Thickness(6, 4, 6, 4);
+            _searchBoxBorder.Margin = new Thickness(0, 0, 0, 6);
+            _searchBoxBorder.IsVisible = false;
+
+            var sGrid = new Grid();
+            sGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            sGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            _tbMemberSearch = new TextBox
+            {
+                Watermark = "输入名称、节点ID或IP搜索...",
+                Background = Brushes.Transparent,
+                Foreground = theme.TextPrimary,
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                FontSize = 10.5
+            };
+            _tbMemberSearch.KeyUp += (s, e) => ApplyMemberFilterAndSearch();
+            Grid.SetColumn(_tbMemberSearch, 0);
+            sGrid.Children.Add(_tbMemberSearch);
+
+            var btnClear = LinuxTheme.CreateIconButton("✕", "清除", () =>
+            {
+                if (_tbMemberSearch != null) _tbMemberSearch.Text = "";
+                ApplyMemberFilterAndSearch();
+            }, 10);
+            Grid.SetColumn(btnClear, 1);
+            sGrid.Children.Add(btnClear);
+
+            _searchBoxBorder.Child = sGrid;
+            sp.Children.Add(_searchBoxBorder);
+
+            // Scrollable Member Results
+            _spMemberResults = new StackPanel { Spacing = 3 };
+            _svMembers = new ScrollViewer
+            {
+                MaxHeight = 180,
+                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                Content = _spMemberResults
+            };
+            sp.Children.Add(_svMembers);
+
+            card.Child = sp;
+            return card;
+        }
+
+        private Border CreateChipPill(string text, MemberFilterType filterType, out TextBlock tbRef)
         {
             var theme = LinuxTheme.Current;
-
-            _overlaySettings = new Border
+            tbRef = new TextBlock
             {
+                Text = text,
+                FontSize = 9.5,
+                Foreground = theme.TextSecondary,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var pill = new Border
+            {
+                Background = theme.InnerTileBg,
+                BorderBrush = theme.BorderMuted,
+                BorderThickness = new Thickness(0.8),
+                CornerRadius = new CornerRadius(9),
+                Padding = new Thickness(6, 1.5, 6, 1.5),
+                Cursor = new Cursor(StandardCursorType.Hand),
+                Child = tbRef
+            };
+            pill.PointerPressed += (s, e) =>
+            {
+                _currentMemberFilter = (_currentMemberFilter == filterType && filterType != MemberFilterType.All) ? MemberFilterType.All : filterType;
+                UpdateChipVisuals();
+                ApplyMemberFilterAndSearch();
+            };
+            return pill;
+        }
+
+        private void UpdateChipVisuals()
+        {
+            var theme = LinuxTheme.Current;
+            if (_chipAll != null && _tbChipAll != null)
+            {
+                bool active = _currentMemberFilter == MemberFilterType.All;
+                _chipAll.Background = active ? new SolidColorBrush(Color.FromArgb(45, 9, 105, 218)) : theme.InnerTileBg;
+                _chipAll.BorderBrush = active ? theme.AccentBlue : theme.BorderMuted;
+                _tbChipAll.Foreground = active ? theme.AccentBlue : theme.TextSecondary;
+                _tbChipAll.FontWeight = active ? FontWeight.SemiBold : FontWeight.Normal;
+            }
+            if (_chipOnline != null && _tbChipOnline != null)
+            {
+                bool active = _currentMemberFilter == MemberFilterType.Online;
+                _chipOnline.Background = active ? new SolidColorBrush(Color.FromArgb(45, 5, 150, 105)) : theme.InnerTileBg;
+                _chipOnline.BorderBrush = active ? theme.AccentEmerald : theme.BorderMuted;
+                _tbChipOnline.Foreground = active ? theme.AccentEmerald : theme.TextSecondary;
+                _tbChipOnline.FontWeight = active ? FontWeight.SemiBold : FontWeight.Normal;
+            }
+            if (_chipOffline != null && _tbChipOffline != null)
+            {
+                bool active = _currentMemberFilter == MemberFilterType.Offline;
+                _chipOffline.Background = active ? new SolidColorBrush(Color.FromArgb(45, 100, 116, 139)) : theme.InnerTileBg;
+                _chipOffline.BorderBrush = active ? theme.TextMuted : theme.BorderMuted;
+                _tbChipOffline.Foreground = active ? theme.TextPrimary : theme.TextSecondary;
+                _tbChipOffline.FontWeight = active ? FontWeight.SemiBold : FontWeight.Normal;
+            }
+        }
+
+        private void ToggleSearchBox()
+        {
+            if (_searchBoxBorder == null) return;
+            if (_searchBoxBorder.IsVisible)
+            {
+                _searchBoxBorder.IsVisible = false;
+                if (_btnToggleSearch != null) _btnToggleSearch.Foreground = LinuxTheme.Current.TextSecondary;
+                if (_tbMemberSearch != null) _tbMemberSearch.Text = "";
+                ApplyMemberFilterAndSearch();
+            }
+            else
+            {
+                ExpandSearchBox();
+            }
+        }
+
+        private void ExpandSearchBox()
+        {
+            if (_searchBoxBorder == null) return;
+            _searchBoxBorder.IsVisible = true;
+            if (_btnToggleSearch != null) _btnToggleSearch.Foreground = LinuxTheme.Current.AccentBlue;
+            _tbMemberSearch?.Focus();
+        }
+
+        // ==========================================
+        // Settings Overlay
+        // ==========================================
+        private Border BuildSettingsOverlay(LinuxThemePalette theme)
+        {
+            var overlay = new Border
+            {
+                IsVisible = false,
                 Background = theme.CardBg,
                 BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(1.2),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(14, 12),
-                IsVisible = false,
-                BoxShadow = BoxShadows.Parse("0 4 18 #32000000")
-            };
-
-            var spSet = new StackPanel { Spacing = 8 };
-
-            var gSetHead = new Grid();
-            gSetHead.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gSetHead.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            var tbSetTitle = new TextBlock { Text = "⚙ 设置与偏好", FontSize = 12, FontWeight = FontWeight.Bold, Foreground = theme.TextPrimary };
-            Grid.SetColumn(tbSetTitle, 0);
-            var btnSetClose = LinuxTheme.CreateIconButton("✕", "关闭设置", () => ToggleSettings());
-            Grid.SetColumn(btnSetClose, 1);
-            gSetHead.Children.Add(tbSetTitle);
-            gSetHead.Children.Add(btnSetClose);
-            spSet.Children.Add(gSetHead);
-
-            // 1. Theme toggle button
-            var btnThemeToggle = new Button
-            {
-                Content = theme.IsDark ? "☀️ 切换为浅色模式 (Light)" : "🌙 切换为深色模式 (Dark)",
-                FontSize = 10.5,
-                FontWeight = FontWeight.SemiBold,
-                Foreground = theme.AccentBlue,
-                Background = theme.InnerTileBg,
-                BorderBrush = theme.BorderMuted,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(10, 6),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                Cursor = new Cursor(StandardCursorType.Hand)
+                CornerRadius = new CornerRadius(10),
+                Margin = new Thickness(2, 0, 2, 8),
+                Padding = new Thickness(12, 10, 12, 10),
+                VerticalAlignment = VerticalAlignment.Top,
+                BoxShadow = BoxShadows.Parse(theme.IsDark ? "0 4 16 #60000000" : "0 4 16 #30000000")
             };
-            btnThemeToggle.Click += (s, e) =>
-            {
-                LinuxTheme.SetDark(!LinuxTheme.Current.IsDark);
-            };
-            spSet.Children.Add(btnThemeToggle);
 
-            // 2. Online Update Box
-            var updateBox = new Border
-            {
-                Background = theme.InnerTileBg,
-                BorderBrush = theme.BorderMuted,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(10, 8),
-                Margin = new Thickness(0, 2, 0, 2)
-            };
-            var updateSp = new StackPanel { Spacing = 6 };
+            var sp = new StackPanel { Spacing = 6 };
 
-            var gUpHead = new Grid();
-            gUpHead.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
-            gUpHead.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            // Top bar
+            var topRow = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            topRow.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            topRow.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
 
-            var tbVer = new TextBlock
+            var lblTitle = new TextBlock
             {
-                Text = "当前版本: " + UpdateChecker.CurrentVersion + " (Linux " + (Environment.Is64BitProcess ? "x64" : "x86") + ")",
-                FontSize = 10,
-                FontWeight = FontWeight.SemiBold,
+                Text = "⚙ 设置",
+                FontSize = 11.5,
+                FontWeight = FontWeight.Bold,
                 Foreground = theme.TextPrimary,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            Grid.SetColumn(tbVer, 0);
-            var tbBranch = new TextBlock
+            Grid.SetColumn(lblTitle, 0);
+            topRow.Children.Add(lblTitle);
+
+            var btnClose = LinuxTheme.CreateIconButton("✕", "关闭", () => overlay.IsVisible = false, 11);
+            Grid.SetColumn(btnClose, 1);
+            topRow.Children.Add(btnClose);
+            sp.Children.Add(topRow);
+
+            // Theme Switcher & Language Switcher
+            var prefGrid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            prefGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            prefGrid.ColumnDefinitions.Add(new ColumnDefinition(6, GridUnitType.Pixel));
+            prefGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
+            var btnTheme = new Button
             {
-                Text = "main",
-                FontSize = 9.5,
-                Foreground = theme.TextMuted,
-                VerticalAlignment = VerticalAlignment.Center
+                Content = theme.IsDark ? "☀️ 浅色模式" : "🌙 深色模式",
+                FontSize = 10,
+                Foreground = theme.TextPrimary,
+                Background = theme.InnerTileBg,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(6, 4),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                Cursor = new Cursor(StandardCursorType.Hand)
             };
-            Grid.SetColumn(tbBranch, 1);
-            gUpHead.Children.Add(tbVer);
-            gUpHead.Children.Add(tbBranch);
-            updateSp.Children.Add(gUpHead);
+            btnTheme.Click += (s, e) => LinuxTheme.SetDark(!theme.IsDark);
+            Grid.SetColumn(btnTheme, 0);
+            prefGrid.Children.Add(btnTheme);
+
+            var btnLang = new Button
+            {
+                Content = "🇨🇳 简体中文",
+                FontSize = 10,
+                Foreground = theme.TextPrimary,
+                Background = theme.InnerTileBg,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(6, 4),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            Grid.SetColumn(btnLang, 2);
+            prefGrid.Children.Add(btnLang);
+            sp.Children.Add(prefGrid);
+
+            // ZeroTier Controller Settings
+            var cfg = _memberDir?.CurrentConfig ?? new LinuxMemberConfig();
+            sp.Children.Add(LinuxTheme.CreateMutedText("控制器 URL:"));
+            _txtSettingUrl = LinuxTheme.CreateInputTextBox(string.IsNullOrEmpty(cfg.ControllerUrl) ? "https://api.zerotier.com" : cfg.ControllerUrl);
+            sp.Children.Add(_txtSettingUrl);
+
+            var idTokenGrid = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+            idTokenGrid.ColumnDefinitions.Add(new ColumnDefinition(135, GridUnitType.Pixel));
+            idTokenGrid.ColumnDefinitions.Add(new ColumnDefinition(8, GridUnitType.Pixel));
+            idTokenGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
+            var spNwid = new StackPanel();
+            spNwid.Children.Add(LinuxTheme.CreateMutedText("网络 ID:"));
+            _txtSettingNwid = LinuxTheme.CreateInputTextBox(cfg.NetworkId);
+            spNwid.Children.Add(_txtSettingNwid);
+            Grid.SetColumn(spNwid, 0);
+            idTokenGrid.Children.Add(spNwid);
+
+            var spToken = new StackPanel();
+            spToken.Children.Add(LinuxTheme.CreateMutedText("API 密钥:"));
+            _txtSettingToken = LinuxTheme.CreateInputTextBox(cfg.ApiToken);
+            _txtSettingToken.PasswordChar = '●';
+            spToken.Children.Add(_txtSettingToken);
+            Grid.SetColumn(spToken, 2);
+            idTokenGrid.Children.Add(spToken);
+            sp.Children.Add(idTokenGrid);
+
+            _lblTestStatus = new TextBlock { Text = "", FontSize = 10, Margin = new Thickness(0, 2, 0, 0) };
+            sp.Children.Add(_lblTestStatus);
+
+            // GitHub & Update Box
+            var updateBox = LinuxTheme.CreateInnerBorder();
+            updateBox.Padding = new Thickness(8, 6, 8, 6);
+            updateBox.Margin = new Thickness(0, 4, 0, 4);
+
+            var upSp = new StackPanel();
+            var upHeadGrid = new Grid();
+            upHeadGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            upHeadGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var lblVer = LinuxTheme.CreateMutedText($"当前版本: v{UpdateChecker.CurrentVersion}");
+            lblVer.FontWeight = FontWeight.SemiBold;
+            Grid.SetColumn(lblVer, 0);
+            upHeadGrid.Children.Add(lblVer);
+
+            var lblBranch = LinuxTheme.CreateMutedText("main");
+            Grid.SetColumn(lblBranch, 1);
+            upHeadGrid.Children.Add(lblBranch);
+            upSp.Children.Add(upHeadGrid);
 
             _tbUpdateStatus = new TextBlock
             {
                 Text = "",
                 FontSize = 9.5,
+                Margin = new Thickness(0, 4, 0, 2),
                 Foreground = theme.TextMuted,
                 TextWrapping = TextWrapping.Wrap,
                 IsVisible = false
             };
-            updateSp.Children.Add(_tbUpdateStatus);
+            upSp.Children.Add(_tbUpdateStatus);
 
-            // Three buttons in one row: 检查更新, 拉取更新 (仅有更新时显示), GitHub
-            var pnlActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 2, 0, 0) };
+            // 3 Buttons in ONE ROW
+            var pnlUpdateActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0), Spacing = 6 };
 
-            var btnCheckUpdate = new Button
+            var btnCheckUp = new Button
             {
                 Content = "🔄 检查更新",
                 FontSize = 10,
                 Foreground = theme.AccentBlue,
-                Background = theme.CardBg,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(8, 4),
+                Background = new SolidColorBrush(Color.FromArgb(25, 9, 105, 218)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 9, 105, 218)),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3),
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
-            btnCheckUpdate.Click += (s, e) =>
-            {
-                _tbUpdateStatus.IsVisible = true;
-                _tbUpdateStatus.Text = "⏳ 正在连接 GitHub 检查更新...";
-                _tbUpdateStatus.Foreground = theme.TextMuted;
-                if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
-
-                UpdateChecker.CheckForUpdatesAsync(info =>
-                {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        if (!info.Success)
-                        {
-                            _tbUpdateStatus.Text = "✕ 检查更新失败: " + info.ErrorMessage;
-                            _tbUpdateStatus.Foreground = theme.AccentRed;
-                            if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
-                            return;
-                        }
-
-                        if (info.HasUpdate)
-                        {
-                            _latestDownloadUrl = info.DownloadUrl;
-                            string notes = !string.IsNullOrEmpty(info.ReleaseNotes) ? ("\n" + info.ReleaseNotes.Trim()) : "";
-                            _tbUpdateStatus.Text = "🚀 发现新版本: " + info.LatestVersion + notes;
-                            _tbUpdateStatus.Foreground = theme.AccentEmerald;
-                            if (_btnPullUpdate != null)
-                            {
-                                _btnPullUpdate.Content = "⬇ 拉取更新 (" + info.LatestVersion + ")";
-                                _btnPullUpdate.IsVisible = true;
-                            }
-                        }
-                        else
-                        {
-                            _tbUpdateStatus.Text = "✓ 当前已是最新版本 (" + UpdateChecker.CurrentVersion + ")";
-                            _tbUpdateStatus.Foreground = theme.AccentEmerald;
-                            if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
-                        }
-                    });
-                });
-            };
-            pnlActions.Children.Add(btnCheckUpdate);
+            btnCheckUp.Click += (s, e) => CheckForAppUpdates();
+            pnlUpdateActions.Children.Add(btnCheckUp);
 
             _btnPullUpdate = new Button
             {
                 Content = "⬇ 拉取更新",
                 FontSize = 10,
-                FontWeight = FontWeight.Bold,
                 Foreground = theme.AccentEmerald,
-                Background = theme.CardBg,
-                BorderBrush = theme.AccentEmerald,
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(8, 4),
+                Background = new SolidColorBrush(Color.FromArgb(30, 5, 150, 105)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 5, 150, 105)),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3),
                 Cursor = new Cursor(StandardCursorType.Hand),
                 IsVisible = false
             };
-            _btnPullUpdate.Click += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(_latestDownloadUrl))
-                {
-                    _btnPullUpdate.IsEnabled = false;
-                    _tbUpdateStatus.Text = "⏳ 准备下载并热替换更新...";
-                    _tbUpdateStatus.Foreground = theme.AccentAmber;
+            _btnPullUpdate.Click += (s, e) => PerformPullUpdate();
+            pnlUpdateActions.Children.Add(_btnPullUpdate);
 
-                    UpdateChecker.DownloadAndApplyUpdateAsync(_latestDownloadUrl,
-                        pct => Dispatcher.UIThread.Post(() =>
-                        {
-                            _tbUpdateStatus.Text = string.Format("⏳ 下载更新中... {0}%", pct);
-                        }),
-                        (ok, msg) => Dispatcher.UIThread.Post(() =>
-                        {
-                            _btnPullUpdate.IsEnabled = true;
-                            _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
-                            _tbUpdateStatus.Foreground = ok ? theme.AccentEmerald : theme.AccentRed;
-                        }));
-                }
-            };
-            pnlActions.Children.Add(_btnPullUpdate);
-
-            var btnGithub = new Button
+            var btnOpenRepo = new Button
             {
                 Content = "🌐 GitHub",
                 FontSize = 10,
                 Foreground = theme.TextSecondary,
                 Background = theme.CardBg,
                 BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(8, 4),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3),
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
-            btnGithub.Click += (s, e) =>
+            btnOpenRepo.Click += (s, e) =>
             {
-                try
+                try { Process.Start(new ProcessStartInfo("https://github.com/Nicotinamide/SysMonitor") { UseShellExecute = true }); } catch { }
+            };
+            pnlUpdateActions.Children.Add(btnOpenRepo);
+
+            upSp.Children.Add(pnlUpdateActions);
+            updateBox.Child = upSp;
+            sp.Children.Add(updateBox);
+
+            // Bottom Action Row: [⚡ 测试连接]  [💾 保存]  [✕ 关闭]
+            var btnGrid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition(6, GridUnitType.Pixel));
+            btnGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+            var btnTest = new Button
+            {
+                Content = "⚡ 测试连接",
+                FontSize = 10.5,
+                Foreground = theme.AccentBlue,
+                Background = new SolidColorBrush(Color.FromArgb(30, 9, 105, 218)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 9, 105, 218)),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3),
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            btnTest.Click += (s, e) =>
+            {
+                _lblTestStatus.Text = "⏳ 正在测试连接...";
+                _lblTestStatus.Foreground = theme.AccentAmber;
+                _ = _memberDir.TestConnectionAsync(_txtSettingUrl.Text, _txtSettingNwid.Text, _txtSettingToken.Text, (success, count, err) =>
                 {
-                    Process.Start(new ProcessStartInfo
+                    Dispatcher.UIThread.Post(() =>
                     {
-                        FileName = "xdg-open",
-                        Arguments = "https://github.com/Nicotinamide/SysMonitor",
-                        UseShellExecute = false
+                        if (success)
+                        {
+                            _lblTestStatus.Text = $"✓ 连接成功！已读取到 {count} 个成员";
+                            _lblTestStatus.Foreground = theme.AccentEmerald;
+                        }
+                        else
+                        {
+                            _lblTestStatus.Text = $"✕ 连接失败: {err}";
+                            _lblTestStatus.Foreground = theme.AccentRed;
+                        }
                     });
-                }
-                catch { }
+                });
             };
-            pnlActions.Children.Add(btnGithub);
+            Grid.SetColumn(btnTest, 0);
+            btnGrid.Children.Add(btnTest);
 
-            updateSp.Children.Add(pnlActions);
-            updateBox.Child = updateSp;
-            spSet.Children.Add(updateBox);
-
-            // 3. Exit application button
-            var btnExit = new Button
+            var btnSave = new Button
             {
-                Content = "🚪 退出 SysMonitor",
-                FontSize = 10,
-                Foreground = theme.AccentRed,
-                Background = theme.InnerTileBg,
-                BorderBrush = theme.BorderMuted,
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(8, 4),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Content = "💾 保存",
+                FontSize = 10.5,
+                Foreground = theme.AccentEmerald,
+                Background = new SolidColorBrush(Color.FromArgb(35, 5, 150, 105)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(100, 5, 150, 105)),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(10, 3),
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
-            btnExit.Click += (s, e) =>
+            btnSave.Click += (s, e) =>
             {
-                _parentFloat?.Close();
-                Close();
+                _memberDir.SaveEncryptedConfig(_txtSettingUrl.Text, _txtSettingNwid.Text, _txtSettingToken.Text);
+                overlay.IsVisible = false;
+                ShowToast("✓ 设置已保存");
+                UpdateZeroTierCardsVisibility();
             };
-            spSet.Children.Add(btnExit);
+            Grid.SetColumn(btnSave, 2);
+            btnGrid.Children.Add(btnSave);
 
-            _overlaySettings.Child = spSet;
-            gridRoot.Children.Add(_overlaySettings);
+            var btnCancel = new Button
+            {
+                Content = "✕ 关闭",
+                FontSize = 10.5,
+                Foreground = theme.TextSecondary,
+                Background = Brushes.Transparent,
+                BorderBrush = theme.BorderBrush,
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3),
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            btnCancel.Click += (s, e) => overlay.IsVisible = false;
+            Grid.SetColumn(btnCancel, 4);
+            btnGrid.Children.Add(btnCancel);
+
+            sp.Children.Add(btnGrid);
+            overlay.Child = sp;
+            return overlay;
         }
 
-        private void ToggleSettings()
+        private void ToggleSettingsView()
         {
-            if (_overlaySettings != null)
+            if (_overlaySettings == null) return;
+            _overlaySettings.IsVisible = !_overlaySettings.IsVisible;
+            if (_overlaySettings.IsVisible)
             {
-                _overlaySettings.IsVisible = !_overlaySettings.IsVisible;
+                var cfg = _memberDir?.CurrentConfig;
+                if (cfg != null)
+                {
+                    if (_txtSettingUrl != null) _txtSettingUrl.Text = cfg.ControllerUrl;
+                    if (_txtSettingNwid != null) _txtSettingNwid.Text = cfg.NetworkId;
+                    if (_txtSettingToken != null) _txtSettingToken.Text = cfg.ApiToken;
+                }
+                if (_lblTestStatus != null) _lblTestStatus.Text = "";
             }
         }
 
-        public void PositionNear(int left, int top, int width, int height)
+        private void CheckForAppUpdates()
         {
-            var screen = Screens.Primary ?? Screens.All.FirstOrDefault();
-            if (screen == null)
+            if (_tbUpdateStatus != null)
             {
-                Position = new PixelPoint(left - 385 - 8, top);
-                return;
+                _tbUpdateStatus.IsVisible = true;
+                _tbUpdateStatus.Text = "⏳ 正在检查最新版本...";
+                _tbUpdateStatus.Foreground = LinuxTheme.Current.TextMuted;
             }
+            if (_btnPullUpdate != null) _btnPullUpdate.IsVisible = false;
 
-            var wa = screen.WorkingArea;
-            int detailW = 385;
-            int detailH = (int)Bounds.Height > 0 ? (int)Bounds.Height : 480;
-
-            int targetLeft;
-            if (left + width + detailW + 10 <= wa.X + wa.Width)
+            UpdateChecker.CheckForUpdatesAsync((info) =>
             {
-                targetLeft = left + width + 8;
-            }
-            else
-            {
-                targetLeft = left - detailW - 8;
-            }
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_tbUpdateStatus == null) return;
+                    var theme = LinuxTheme.Current;
 
-            if (targetLeft < wa.X + 8) targetLeft = wa.X + 8;
-            if (targetLeft + detailW > wa.X + wa.Width - 8) targetLeft = wa.X + wa.Width - detailW - 8;
+                    if (!info.Success)
+                    {
+                        _tbUpdateStatus.Text = $"✕ 检查失败: {info.ErrorMessage}";
+                        _tbUpdateStatus.Foreground = theme.AccentRed;
+                        return;
+                    }
 
-            int targetTop;
-            if ((top + height / 2.0) > (wa.Y + wa.Height / 2.0))
-            {
-                targetTop = (top + height) - detailH;
-            }
-            else
-            {
-                targetTop = top;
-            }
+                    if (info.HasUpdate)
+                    {
+                        _latestDownloadUrl = info.DownloadUrl;
+                        string notes = !string.IsNullOrEmpty(info.ReleaseNotes) ? ("\n" + info.ReleaseNotes.Trim()) : "";
+                        _tbUpdateStatus.Text = $"🚀 发现新版本: {info.LatestVersion}{notes}";
+                        _tbUpdateStatus.Foreground = theme.AccentEmerald;
 
-            if (targetTop + detailH > wa.Y + wa.Height - 8) targetTop = wa.Y + wa.Height - detailH - 8;
-            if (targetTop < wa.Y + 8) targetTop = wa.Y + 8;
-
-            Position = new PixelPoint(targetLeft, targetTop);
+                        if (_btnPullUpdate != null)
+                        {
+                            _btnPullUpdate.Content = $"⬇ 拉取更新 ({info.LatestVersion})";
+                            _btnPullUpdate.IsVisible = true;
+                        }
+                    }
+                    else
+                    {
+                        _tbUpdateStatus.Text = $"✓ 已是最新版本 (v{UpdateChecker.CurrentVersion})";
+                        _tbUpdateStatus.Foreground = theme.AccentEmerald;
+                    }
+                });
+            });
         }
 
-        public void UpdateTelemetry(double cpu, MemorySnapshot mem, NetworkRateSnapshot net, BatterySnapshot bat, ZeroTierLocalSnapshot zt)
+        private void PerformPullUpdate()
         {
-            _lastCpu = cpu;
-            _lastMem = mem;
-            _lastNet = net;
-            _lastBat = bat;
-            _lastZt = zt;
+            if (string.IsNullOrEmpty(_latestDownloadUrl)) return;
+            _tbUpdateStatus.Text = "⏳ 正在拉取更新...";
+            _btnPullUpdate.IsEnabled = false;
 
+            UpdateChecker.DownloadAndApplyUpdateAsync(_latestDownloadUrl,
+                (pct) =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (_tbUpdateStatus != null) _tbUpdateStatus.Text = $"⏳ 下载中... {pct}%";
+                    });
+                },
+                (ok, msg) =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        _btnPullUpdate.IsEnabled = true;
+                        if (_tbUpdateStatus != null)
+                        {
+                            _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
+                            _tbUpdateStatus.Foreground = ok ? LinuxTheme.Current.AccentEmerald : LinuxTheme.Current.AccentRed;
+                        }
+                    });
+                });
+        }
+
+        private void UpdateZeroTierCardsVisibility()
+        {
+            if (_cardMember != null)
+            {
+                _cardMember.IsVisible = _memberDir != null && _memberDir.HasToken;
+            }
+        }
+
+        public void ShowToast(string message)
+        {
+            if (_tbToast != null && _bToast != null)
+            {
+                _tbToast.Text = message;
+                _bToast.IsVisible = true;
+                _toastTimer.Stop();
+                _toastTimer.Start();
+            }
+        }
+
+        // ==========================================
+        // Telemetry Update Handlers
+        // ==========================================
+        public void UpdateSystemLoad(LinuxSystemLoadData load)
+        {
+            _lastLoad = load;
             var theme = LinuxTheme.Current;
 
-            // CPU
-            _tbCpuVal.Text = string.Format("{0:F1}%", cpu);
-            _barCpuFill.Width = Math.Max(0, Math.Min(140, (cpu / 100.0) * 140));
-
-            // RAM
-            _tbRamVal.Text = string.Format("{0:F1}G / {1:F1}G ({2}%)", mem.UsedGB, mem.TotalGB, mem.UsagePercent);
-            _barRamFill.Width = Math.Max(0, Math.Min(140, (mem.UsagePercent / 100.0) * 140));
-
-            // PWR
-            if (bat.IsPluggedIn || bat.IsCharging)
+            if (_tbCpuVal != null)
             {
-                _tbPwrStatus.Text = string.Format("⚡ 正在充电 ({0}%)", bat.Percent);
-                _tbPwrWatts.Text = string.Format("{0:F1} W", bat.RateWatts);
+                _tbCpuVal.Text = $"{load.CpuPercent:0.0}%";
+                _tbCpuVal.Foreground = load.CpuPercent > 80.0 ? theme.AccentRed : (load.CpuPercent > 50.0 ? theme.AccentAmber : theme.AccentBlue);
             }
-            else
+            if (_rectCpuBar != null)
             {
-                _tbPwrStatus.Text = string.Format("🔋 电池供电 ({0}%)", bat.Percent);
-                _tbPwrWatts.Text = string.Format("{0:F1} W", bat.RateWatts);
+                _rectCpuBar.Width = Math.Max(2, (load.CpuPercent / 100.0) * 165.0);
             }
 
-            // NET
-            _tbNetDown.Text = string.Format("↓ 下载: {0}", FormatRate(net.DownloadKBps));
-            _tbNetUp.Text = string.Format("↑ 上传: {0}", FormatRate(net.UploadKBps));
+            if (_tbRamPercent != null)
+                _tbRamPercent.Text = $"物理内存 {load.RamPercent}%";
 
-            // ZeroTier
-            if (zt.IsRunning)
+            if (_tbRamVal != null)
             {
-                _tbZtNode.Text = string.Format("本地节点 ID: {0}", zt.NodeId ?? "N/A");
-                _tbZtStatus.Text = zt.PeerCount > 0
-                    ? string.Format("客户端状态: 正常运行 (已发现 {0} 个对等节点)", zt.PeerCount)
-                    : "客户端状态: 正常运行";
-                if (zt.MoonCount > 0)
+                _tbRamVal.Text = $"{load.RamUsedGb:0.0} / {load.RamTotalGb:0.0} GB";
+                _tbRamVal.Foreground = load.RamPercent > 85 ? theme.AccentRed : theme.AccentEmerald;
+            }
+            if (_rectRamBar != null)
+            {
+                _rectRamBar.Width = Math.Max(2, (load.RamPercent / 100.0) * 165.0);
+            }
+        }
+
+        public void UpdatePower(LinuxPowerData power)
+        {
+            _lastPower = power;
+            var theme = LinuxTheme.Current;
+
+            if (_tbPowerBadge != null && _bPowerBadge != null)
+            {
+                _tbPowerBadge.Text = power.StatusText;
+                bool isFull = power.StateKind == LinuxPowerStateKind.ChargedFull || power.StateKind == LinuxPowerStateKind.AcDirect;
+                bool isCharging = power.StateKind == LinuxPowerStateKind.ChargingFast;
+                var color = isFull ? theme.AccentEmerald : (isCharging ? theme.AccentAmber : theme.AccentAmber);
+
+                _tbPowerBadge.Foreground = color;
+                _bPowerBadge.Background = new SolidColorBrush(Color.FromArgb(35, 5, 150, 105));
+            }
+
+            if (_tbPowerPcWatts != null)
+                _tbPowerPcWatts.Text = power.CpuWatts > 0.5 ? $"{power.CpuWatts:0.0}W" : "--";
+
+            if (_tbPowerBatWatts != null)
+            {
+                if (power.IsCharging) _tbPowerBatWatts.Text = $"+{power.Watts:0.0}W";
+                else if (power.IsDischarging) _tbPowerBatWatts.Text = $"-{power.Watts:0.0}W";
+                else _tbPowerBatWatts.Text = "0.0W";
+            }
+
+            if (_tbPowerBatLevel != null)
+                _tbPowerBatLevel.Text = power.BatteryWh > 0 ? $"{power.BatteryWh:0.0}Wh ({power.BatteryPercent}%)" : $"{power.BatteryPercent}%";
+
+            if (_tbPowerBatEta != null)
+                _tbPowerBatEta.Text = power.EstimatedTimeStr;
+        }
+
+        public void UpdateNetwork(LinuxNetworkData net)
+        {
+            _lastNet = net;
+
+            if (_tbNetIface != null) _tbNetIface.Text = net.ActiveInterface;
+            if (_tbNetLinkSpeed != null) _tbNetLinkSpeed.Text = net.LinkSpeedStr;
+            if (_tbNetLocalIp != null) _tbNetLocalIp.Text = net.LocalIp;
+            if (_tbNetSessionTraffic != null) _tbNetSessionTraffic.Text = $"↓ {net.SessionRecvMb:0.0}MB  ↑ {net.SessionSentMb:0.0}MB";
+
+            if (_tbNetFlag != null) _tbNetFlag.Text = LinuxTelemetryEngine.CountryCodeToEmoji(net.CountryCode);
+            if (_tbNetPublicIp != null) _tbNetPublicIp.Text = net.PublicIp;
+
+            if (_tbNetGeoIsp != null)
+            {
+                string loc = "";
+                if (!string.IsNullOrEmpty(net.Country)) loc += net.Country;
+                if (!string.IsNullOrEmpty(net.City)) loc += (loc.Length > 0 ? " · " : "") + net.City;
+                if (!string.IsNullOrEmpty(net.Isp)) loc += (loc.Length > 0 ? " · " : "") + net.Isp;
+                _tbNetGeoIsp.Text = !string.IsNullOrEmpty(loc) ? loc : "公网出口归属获取中...";
+            }
+        }
+
+        public void UpdateZeroTier(LinuxZeroTierData zt)
+        {
+            _lastZt = zt;
+            var theme = LinuxTheme.Current;
+
+            if (_tbZtBadge != null && _bZtBadge != null)
+            {
+                if (zt.IsRunning)
                 {
-                    _tbZtMoon.Text = string.Format("Moon 轨道: 直连已建立 ({0}ms)", zt.MinMoonLatency);
-                    _tbZtMoon.Foreground = theme.AccentEmerald;
+                    _tbZtBadge.Text = "已连入";
+                    _tbZtBadge.Foreground = theme.AccentEmerald;
+                    _bZtBadge.Background = new SolidColorBrush(Color.FromArgb(35, 5, 150, 105));
                 }
                 else
                 {
-                    _tbZtMoon.Text = "Moon 轨道: 中继探测中";
-                    _tbZtMoon.Foreground = theme.AccentAmber;
+                    _tbZtBadge.Text = "未运行";
+                    _tbZtBadge.Foreground = theme.AccentRed;
+                    _bZtBadge.Background = new SolidColorBrush(Color.FromArgb(35, 220, 38, 38));
                 }
             }
-            else
+
+            if (_tbZtNode != null)
             {
-                _tbZtNode.Text = "本地节点 ID: 未运行";
-                _tbZtStatus.Text = "客户端状态: ZeroTier 守护进程未运行";
-                _tbZtMoon.Text = "Moon 轨道: 未连接";
-                _tbZtMoon.Foreground = theme.TextMuted;
+                _tbZtNode.Text = !string.IsNullOrEmpty(zt.LocalNodeId) ? zt.LocalNodeId : "--";
+            }
+
+            if (_spMoons != null)
+            {
+                _spMoons.Children.Clear();
+                if (zt.Moons.Count == 0)
+                {
+                    var empty = LinuxTheme.CreateMutedText("未加入 Moon 中继中转节点");
+                    _spMoons.Children.Add(empty);
+                }
+                else
+                {
+                    foreach (var m in zt.Moons)
+                    {
+                        var mCard = LinuxTheme.CreateInnerBorder();
+                        mCard.Padding = new Thickness(8, 6, 8, 6);
+
+                        var mg = new Grid();
+                        mg.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+                        mg.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+                        var leftSp = new StackPanel();
+                        var addr = new TextBlock
+                        {
+                            Text = "Moon: " + m.Address,
+                            Foreground = theme.TextPrimary,
+                            FontSize = 11,
+                            FontWeight = FontWeight.SemiBold,
+                            FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI")
+                        };
+                        string physText = m.IsOffline ? "节点离线" : (!string.IsNullOrEmpty(m.PhysicalAddress) ? m.PhysicalAddress : "中继链路");
+                        var phys = new TextBlock
+                        {
+                            Text = physText,
+                            Foreground = theme.TextSecondary,
+                            FontSize = 10,
+                            Margin = new Thickness(0, 2, 0, 0),
+                            FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI")
+                        };
+                        leftSp.Children.Add(addr);
+                        leftSp.Children.Add(phys);
+                        Grid.SetColumn(leftSp, 0);
+                        mg.Children.Add(leftSp);
+
+                        string badgeText = m.IsOffline ? "掉线" : (m.IsDirect ? $"直连 {m.Latency}ms" : "中继");
+                        var badgeColor = m.IsOffline ? theme.AccentRed : (m.IsDirect ? theme.AccentEmerald : theme.AccentAmber);
+                        var badge = LinuxTheme.CreateBadge(badgeText, badgeColor,
+                            new SolidColorBrush(Color.FromArgb(35, 5, 150, 105)),
+                            new SolidColorBrush(Color.FromArgb(90, 5, 150, 105)));
+                        Grid.SetColumn(badge, 1);
+                        mg.Children.Add(badge);
+
+                        mCard.Child = mg;
+                        _spMoons.Children.Add(mCard);
+                    }
+                }
             }
         }
 
-        private static string FormatRate(double kbps)
+        private void OnMemberStatusChanged(string status)
         {
-            if (kbps >= 1024)
-                return string.Format("{0:F1} MB/s", kbps / 1024.0);
-            return string.Format("{0:F0} KB/s", kbps);
+            if (_tbMemberStatus != null)
+            {
+                _tbMemberStatus.Text = status;
+            }
+        }
+
+        private void OnMembersUpdated(List<LinuxMemberNode> list)
+        {
+            _lastMemberList = list ?? new List<LinuxMemberNode>();
+            int total = _lastMemberList.Count;
+            int online = _lastMemberList.Count(m => m.IsOnline);
+            int offline = total - online;
+
+            if (_tbChipAll != null) _tbChipAll.Text = $"全部 {total}";
+            if (_tbChipOnline != null) _tbChipOnline.Text = $"🟢 {online}";
+            if (_tbChipOffline != null) _tbChipOffline.Text = $"⚪ {offline}";
+
+            ApplyMemberFilterAndSearch();
+        }
+
+        private void ApplyMemberFilterAndSearch()
+        {
+            if (_spMemberResults == null) return;
+            _spMemberResults.Children.Clear();
+
+            var theme = LinuxTheme.Current;
+            string query = _tbMemberSearch?.Text ?? "";
+            var list = _memberDir.Search(query);
+
+            if (_currentMemberFilter == MemberFilterType.Online)
+                list = list.Where(m => m.IsOnline).ToList();
+            else if (_currentMemberFilter == MemberFilterType.Offline)
+                list = list.Where(m => !m.IsOnline).ToList();
+
+            if (list.Count == 0)
+            {
+                string emptyMsg = !string.IsNullOrEmpty(query) ? "未找到匹配的成员" : (_memberDir.HasToken ? "暂无在线设备" : "未配置控制器 Token");
+                var empty = new TextBlock
+                {
+                    Text = emptyMsg,
+                    FontSize = 10.5,
+                    Foreground = theme.TextDim,
+                    Margin = new Thickness(4, 8, 4, 8),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+                _spMemberResults.Children.Add(empty);
+                return;
+            }
+
+            foreach (var m in list.Take(60))
+            {
+                var itemBorder = LinuxTheme.CreateInnerBorder();
+                itemBorder.Padding = new Thickness(6, 4, 6, 4);
+                itemBorder.Cursor = new Cursor(StandardCursorType.Hand);
+
+                var itemGrid = new Grid();
+                itemGrid.ColumnDefinitions.Add(new ColumnDefinition(14, GridUnitType.Pixel));
+                itemGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+                itemGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+
+                // Dot
+                var dot = new Border
+                {
+                    Width = 6,
+                    Height = 6,
+                    CornerRadius = new CornerRadius(3),
+                    Background = m.IsOnline ? theme.AccentEmerald : theme.TextDim,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
+                Grid.SetColumn(dot, 0);
+                itemGrid.Children.Add(dot);
+
+                // Info
+                var spInfo = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                var tbName = new TextBlock
+                {
+                    Text = string.IsNullOrEmpty(m.Name) ? "未命名设备" : m.Name,
+                    FontSize = 10.5,
+                    FontWeight = FontWeight.SemiBold,
+                    Foreground = theme.TextPrimary,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                string subText = m.Latency >= 0 ? $"{m.Id} · {m.Latency}ms" : $"{m.Id} · {(m.IsOnline ? "在线" : "离线")}";
+                var tbSub = new TextBlock
+                {
+                    Text = subText,
+                    FontSize = 9.5,
+                    Foreground = theme.TextSecondary,
+                    FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI")
+                };
+                spInfo.Children.Add(tbName);
+                spInfo.Children.Add(tbSub);
+                Grid.SetColumn(spInfo, 1);
+                itemGrid.Children.Add(spInfo);
+
+                // IP Chip
+                var ipChip = new Border
+                {
+                    Background = theme.CardBg,
+                    BorderBrush = theme.BorderBrush,
+                    BorderThickness = new Thickness(0.6),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(4, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                var tbIp = new TextBlock
+                {
+                    Text = string.IsNullOrEmpty(m.Ip) ? "无 IP" : m.Ip,
+                    FontSize = 10.5,
+                    FontWeight = FontWeight.Bold,
+                    Foreground = string.IsNullOrEmpty(m.Ip) ? theme.TextDim : theme.AccentBlue,
+                    FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI")
+                };
+                ipChip.Child = tbIp;
+                Grid.SetColumn(ipChip, 2);
+                itemGrid.Children.Add(ipChip);
+
+                itemBorder.Child = itemGrid;
+
+                // Click to copy IP
+                string copyTarget = !string.IsNullOrEmpty(m.Ip) ? m.Ip : m.Id;
+                itemBorder.PointerReleased += async (s, e) =>
+                {
+                    if (e.InitialPressMouseButton == MouseButton.Left)
+                    {
+                        try
+                        {
+                            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                            if (clipboard != null)
+                            {
+                                await clipboard.SetTextAsync(copyTarget);
+                                ShowToast($"✓ 已复制 IP: {copyTarget}");
+                            }
+                        }
+                        catch { }
+                    }
+                };
+
+                // Context menu
+                var ctx = new ContextMenu();
+                var miCopyIp = new MenuItem { Header = $"📋 复制 IP ({copyTarget})" };
+                miCopyIp.Click += async (s, e) =>
+                {
+                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                    if (clipboard != null)
+                    {
+                        await clipboard.SetTextAsync(copyTarget);
+                        ShowToast($"✓ 已复制 IP: {copyTarget}");
+                    }
+                };
+                ctx.Items.Add(miCopyIp);
+
+                var miCopyId = new MenuItem { Header = $"📋 复制节点 ID ({m.Id})" };
+                miCopyId.Click += async (s, e) =>
+                {
+                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                    if (clipboard != null)
+                    {
+                        await clipboard.SetTextAsync(m.Id);
+                        ShowToast($"✓ 已复制 ID: {m.Id}");
+                    }
+                };
+                ctx.Items.Add(miCopyId);
+
+                itemBorder.ContextMenu = ctx;
+                _spMemberResults.Children.Add(itemBorder);
+            }
+        }
+
+        private Grid CreateMetricsRow(LinuxThemePalette theme, string lbl1, TextBlock val1, string lbl2, TextBlock val2)
+        {
+            var g = new Grid { Margin = new Thickness(0, 3, 0, 2) };
+            g.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            g.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            g.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            g.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
+            var t1 = LinuxTheme.CreateMutedText(lbl1);
+            t1.Margin = new Thickness(0, 0, 4, 0);
+            Grid.SetColumn(t1, 0); Grid.SetColumn(val1, 1);
+            g.Children.Add(t1); g.Children.Add(val1);
+
+            var t2 = LinuxTheme.CreateMutedText(lbl2);
+            t2.Margin = new Thickness(10, 0, 4, 0);
+            Grid.SetColumn(t2, 2); Grid.SetColumn(val2, 3);
+            g.Children.Add(t2); g.Children.Add(val2);
+
+            return g;
+        }
+
+        private Grid CreateMetricsGrid(LinuxThemePalette theme,
+            string lbl1, TextBlock val1, string lbl2, TextBlock val2,
+            string lbl3, TextBlock val3, string lbl4, TextBlock val4)
+        {
+            var g = new Grid { Margin = new Thickness(0, 3, 0, 2) };
+            g.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            g.RowDefinitions.Add(new RowDefinition(4, GridUnitType.Pixel));
+            g.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+
+            g.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            g.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+            g.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            g.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
+            // Row 0
+            var t1 = LinuxTheme.CreateMutedText(lbl1);
+            t1.Margin = new Thickness(0, 0, 4, 0);
+            Grid.SetRow(t1, 0); Grid.SetColumn(t1, 0);
+            Grid.SetRow(val1, 0); Grid.SetColumn(val1, 1);
+            g.Children.Add(t1); g.Children.Add(val1);
+
+            var t2 = LinuxTheme.CreateMutedText(lbl2);
+            t2.Margin = new Thickness(10, 0, 4, 0);
+            Grid.SetRow(t2, 0); Grid.SetColumn(t2, 2);
+            Grid.SetRow(val2, 0); Grid.SetColumn(val2, 3);
+            g.Children.Add(t2); g.Children.Add(val2);
+
+            // Row 2
+            var t3 = LinuxTheme.CreateMutedText(lbl3);
+            t3.Margin = new Thickness(0, 0, 4, 0);
+            Grid.SetRow(t3, 2); Grid.SetColumn(t3, 0);
+            Grid.SetRow(val3, 2); Grid.SetColumn(val3, 1);
+            g.Children.Add(t3); g.Children.Add(val3);
+
+            var t4 = LinuxTheme.CreateMutedText(lbl4);
+            t4.Margin = new Thickness(10, 0, 4, 0);
+            Grid.SetRow(t4, 2); Grid.SetColumn(t4, 2);
+            Grid.SetRow(val4, 2); Grid.SetColumn(val4, 3);
+            g.Children.Add(t4); g.Children.Add(val4);
+
+            return g;
+        }
+
+        private void ReplayTelemetry()
+        {
+            if (_lastLoad != null) UpdateSystemLoad(_lastLoad);
+            if (_lastPower != null) UpdatePower(_lastPower);
+            if (_lastNet != null) UpdateNetwork(_lastNet);
+            if (_lastZt != null) UpdateZeroTier(_lastZt);
+            UpdateChipVisuals();
+            ApplyMemberFilterAndSearch();
         }
     }
 }
