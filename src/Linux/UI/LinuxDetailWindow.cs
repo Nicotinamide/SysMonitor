@@ -1659,7 +1659,18 @@ namespace SysMonitor.Linux.UI
 
             if (list.Count == 0)
             {
-                string emptyMsg = !string.IsNullOrEmpty(query) ? "未找到匹配的成员" : (_memberDir.HasToken ? i18n.NoOnlineMembers : i18n.NoTokenHint);
+                string emptyMsg;
+                if (!string.IsNullOrEmpty(query))
+                    emptyMsg = i18n.Lang == AppLanguage.Zh ? "未找到匹配的成员" : "No matching members found";
+                else if (_currentMemberFilter == MemberFilterType.Online)
+                    emptyMsg = i18n.NoOnlineMembers;
+                else if (_currentMemberFilter == MemberFilterType.Offline)
+                    emptyMsg = i18n.NoOfflineMembers;
+                else if (_memberDir != null && _memberDir.HasToken)
+                    emptyMsg = "⏳ " + i18n.Syncing;
+                else
+                    emptyMsg = i18n.NoTokenHint;
+
                 var empty = new TextBlock
                 {
                     Text = emptyMsg,
@@ -1800,6 +1811,7 @@ namespace SysMonitor.Linux.UI
                 ctx.Items.Add(miCopyId);
 
                 itemBorder.ContextMenu = ctx;
+                _spMemberResults.Children.Add(itemBorder);
             }
         }
 
