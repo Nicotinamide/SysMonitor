@@ -67,10 +67,16 @@ namespace SysMonitor
 
         public void UpdateZeroTierCardsVisibility()
         {
-            bool hasToken = HasConfiguredToken;
-            Visibility v = hasToken ? Visibility.Visible : Visibility.Collapsed;
-            if (_cardZt != null) _cardZt.Visibility = v;
-            if (_cardMember != null) _cardMember.Visibility = v;
+            // ZeroTier Mesh & Moons 是本机本地守护进程状态，绝不受到 Web API Token 的影响！
+            if (_cardZt != null)
+            {
+                bool isZtAvailable = _lastZt == null || _lastZt.IsInstalled || _lastZt.IsRunning;
+                _cardZt.Visibility = isZtAvailable ? Visibility.Visible : Visibility.Collapsed;
+            }
+            if (_cardMember != null)
+            {
+                _cardMember.Visibility = Visibility.Visible;
+            }
         }
         private TextBox _tbMemberSearch;
         private TextBlock _tbMemberSearchPlaceholder;
@@ -1871,6 +1877,11 @@ namespace SysMonitor
             _lastZt = data;
             Dispatcher.Invoke(new Action(delegate
             {
+                if (_cardZt != null)
+                {
+                    bool isZtAvailable = data.IsInstalled || data.IsRunning;
+                    _cardZt.Visibility = isZtAvailable ? Visibility.Visible : Visibility.Collapsed;
+                }
                 if (_tbZtBadge == null) return;
                 ThemePalette theme = AppTheme.Current;
 
