@@ -36,7 +36,7 @@ namespace SysMonitor
 
     public static class UpdateChecker
     {
-        public const string CurrentVersion = "v1.0.2";
+        public const string CurrentVersion = "v1.0.3";
         public const string RepoOwner = "Nicotinamide";
         public const string RepoName = "SysMonitor";
 
@@ -45,6 +45,18 @@ namespace SysMonitor
             try
             {
                 ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 /* Tls12 */ | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
+            }
+            catch { }
+        }
+
+        private static void Log(string msg)
+        {
+            try
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SysMonitor");
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                string logFile = Path.Combine(dir, "debug.log");
+                File.AppendAllText(logFile, string.Format("[{0:HH:mm:ss.fff}] [Updater] {1}\r\n", DateTime.Now, msg));
             }
             catch { }
         }
@@ -59,7 +71,7 @@ namespace SysMonitor
                 UpdateInfo info = CheckForUpdatesInternal();
                 if (callback != null)
                 {
-                    callback(info);
+                    try { callback(info); } catch { }
                 }
             });
         }
@@ -69,29 +81,32 @@ namespace SysMonitor
             UpdateInfo info = new UpdateInfo();
             try
             {
-                // 1. 先尝试查询 GitHub Releases API
-                string releaseApi = string.Format("https://api.github.com/repos/{0}/{1}/releases/latest", RepoOwner, RepoName);
-                int statusCode;
-                string json = FetchGitHubJson(releaseApi, out statusCode);
+                // 1. 优先尝试从 GitHub Releases 获取正式发版
+                string relUrl = string.Format("https://api.github.com/repos/{0}/{1}/releases", RepoOwner, RepoName);
+                string relJson = HttpGet(relUrl);
 
-                if (statusCode == 200 && !string.IsNullOrEmpty(json))
+                if (!string.IsNullOrEmpty(relJson) && relJson.TrimStart().StartsWith("["))
                 {
-                    ParseReleaseJson(json, info);
-                    return info;
+                    // 检查是否包含任何发版
+                    if (relJson.Contains("\"tag_name\""))
+                    {
+                        ParseReleaseJson(relJson, info);
+                        return info;
+                    }
                 }
 
-                // 2. 若暂无 Release (404)，则查询 main 分支的最新 Commit
-                string commitApi = string.Format("https://api.github.com/repos/{0}/{1}/commits/main", RepoOwner, RepoName);
-                string commitJson = FetchGitHubJson(commitApi, out statusCode);
+                // 2. 如果尚无正式 Release，则获取 main 分支最新的 commit 信息
+                string commitUrl = string.Format("https://api.github.com/repos/{0}/{1}/commits/main", RepoOwner, RepoName);
+                string commitJson = HttpGet(commitUrl);
 
-                if (statusCode == 200 && !string.IsNullOrEmpty(commitJson))
+                if (!string.IsNullOrEmpty(commitJson) && commitJson.Contains("\"sha\""))
                 {
                     ParseCommitJson(commitJson, info);
                     return info;
                 }
 
                 info.Success = false;
-                info.ErrorMessage = "GitHub API response: " + statusCode;
+                info.ErrorMessage = "未找到可用版本信息";
             }
             catch (Exception ex)
             {
@@ -101,38 +116,13 @@ namespace SysMonitor
             return info;
         }
 
-        private static string FetchGitHubJson(string url, out int statusCode)
+        private static string HttpGet(string url)
         {
-            statusCode = 0;
-            try
+            using (WebClient client = new WebClient())
             {
-                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                req.UserAgent = "SysMonitor-Client/" + CurrentVersion;
-                req.Accept = "application/vnd.github.v3+json";
-                req.Timeout = 5000;
-                req.ReadWriteTimeout = 5000;
-
-                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
-                {
-                    statusCode = (int)resp.StatusCode;
-                    using (StreamReader reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
-                    {
-                        return reader.ReadToEnd();
-                    }
-                }
-            }
-            catch (WebException wex)
-            {
-                HttpWebResponse errResp = wex.Response as HttpWebResponse;
-                if (errResp != null)
-                {
-                    statusCode = (int)errResp.StatusCode;
-                }
-                return null;
-            }
-            catch
-            {
-                return null;
+                client.Headers.Add("User-Agent", "SysMonitor-App");
+                client.Headers.Add("Accept", "application/vnd.github.v3+json");
+                return client.DownloadString(url);
             }
         }
 
@@ -157,18 +147,39 @@ namespace SysMonitor
                 info.ReleaseNotes = Regex.Unescape(rawBody);
             }
 
-            // 提取匹配当前系统的下载链接 (Windows: .exe / .zip; Linux: .tar.gz)
-            string searchPattern = Environment.OSVersion.Platform == PlatformID.Win32NT
-                ? "\"browser_download_url\"\\s*:\\s*\"([^\"]*(\\.exe|windows[^\"]*\\.zip))\""
-                : "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*\\.tar\\.gz)\"";
-
-            var dlMatch = Regex.Match(json, searchPattern, RegexOptions.IgnoreCase);
-            if (dlMatch.Success)
+            // 提取匹配当前系统的下载链接
+            // Windows: 绝对优先匹配独立 EXE (SysMonitor.exe)，次选 windows*.zip 避免把压缩包直接当可执行程序下载
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
             {
-                info.DownloadUrl = dlMatch.Groups[1].Value;
+                var exeMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*SysMonitor\\.exe)\"", RegexOptions.IgnoreCase);
+                if (!exeMatch.Success)
+                {
+                    exeMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*\\.exe)\"", RegexOptions.IgnoreCase);
+                }
+
+                if (exeMatch.Success)
+                {
+                    info.DownloadUrl = exeMatch.Groups[1].Value;
+                }
+                else
+                {
+                    var zipMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*windows[^\"]*\\.zip)\"", RegexOptions.IgnoreCase);
+                    if (zipMatch.Success)
+                    {
+                        info.DownloadUrl = zipMatch.Groups[1].Value;
+                    }
+                }
+            }
+            else
+            {
+                var linuxMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*\\.tar\\.gz)\"", RegexOptions.IgnoreCase);
+                if (linuxMatch.Success)
+                {
+                    info.DownloadUrl = linuxMatch.Groups[1].Value;
+                }
             }
 
-            // 判断是否有新版本 (例如 v1.0.1 vs v1.0.0)
+            // 判断是否有新版本 (例如 v1.0.3 vs v1.0.2)
             if (!string.IsNullOrEmpty(info.LatestVersion))
             {
                 info.HasUpdate = CompareVersions(info.LatestVersion, CurrentVersion) > 0;
@@ -231,8 +242,18 @@ namespace SysMonitor
                         return;
                     }
 
-                    string tempPath = Path.Combine(Path.GetTempPath(), "SysMonitor_Latest.exe");
-                    if (File.Exists(tempPath)) File.Delete(tempPath);
+                    Log("Starting update download from: " + downloadUrl);
+
+                    string tempExePath = Path.Combine(Path.GetTempPath(), "SysMonitor_Latest.exe");
+                    if (File.Exists(tempExePath))
+                    {
+                        try { File.Delete(tempExePath); } catch { }
+                    }
+
+                    bool isZip = downloadUrl.IndexOf(".zip", StringComparison.OrdinalIgnoreCase) >= 0;
+                    string downloadTarget = isZip 
+                        ? Path.Combine(Path.GetTempPath(), "SysMonitor_Update_" + Guid.NewGuid().ToString("N") + ".zip") 
+                        : tempExePath;
 
                     using (WebClient client = new WebClient())
                     {
@@ -242,12 +263,61 @@ namespace SysMonitor
                             if (progressCallback != null) progressCallback(e.ProgressPercentage);
                         };
 
-                        client.DownloadFile(new Uri(downloadUrl), tempPath);
+                        client.DownloadFile(new Uri(downloadUrl), downloadTarget);
                     }
+
+                    if (isZip)
+                    {
+                        Log("Extracting zip archive: " + downloadTarget);
+                        string extractDir = Path.Combine(Path.GetTempPath(), "SysMonitor_Extract_" + Guid.NewGuid().ToString("N"));
+                        if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
+                        Directory.CreateDirectory(extractDir);
+
+                        ProcessStartInfo unzipPsi = new ProcessStartInfo
+                        {
+                            FileName = "powershell",
+                            Arguments = string.Format("-NoProfile -Command \"Expand-Archive -Path '{0}' -DestinationPath '{1}' -Force\"", downloadTarget, extractDir),
+                            CreateNoWindow = true,
+                            UseShellExecute = false
+                        };
+                        using (Process p = Process.Start(unzipPsi))
+                        {
+                            if (p != null) p.WaitForExit(30000);
+                        }
+
+                        string foundExe = Path.Combine(extractDir, "SysMonitor.exe");
+                        if (!File.Exists(foundExe))
+                        {
+                            string[] exes = Directory.GetFiles(extractDir, "*.exe", SearchOption.AllDirectories);
+                            if (exes.Length > 0) foundExe = exes[0];
+                        }
+
+                        if (!File.Exists(foundExe))
+                        {
+                            if (finishCallback != null) finishCallback(false, "压缩包中未找到 SysMonitor.exe");
+                            return;
+                        }
+
+                        File.Copy(foundExe, tempExePath, true);
+                        try { File.Delete(downloadTarget); } catch { }
+                        try { Directory.Delete(extractDir, true); } catch { }
+                    }
+
+                    // 验证下载文件有效性 (正常单文件 EXE 约 400KB~2MB)
+                    FileInfo fi = new FileInfo(tempExePath);
+                    if (!fi.Exists || fi.Length < 50000)
+                    {
+                        Log("Downloaded file invalid or too small: " + (fi.Exists ? fi.Length.ToString() : "not found"));
+                        if (finishCallback != null) finishCallback(false, "下载文件不完整或损坏");
+                        return;
+                    }
+
+                    Log("Update file ready (" + fi.Length + " bytes). Preparing updater batch...");
 
                     // 替换并重启
                     string currentExe = Process.GetCurrentProcess().MainModule.FileName;
                     int currentPid = Process.GetCurrentProcess().Id;
+                    string currentDir = Path.GetDirectoryName(currentExe);
                     string batchScript = Path.Combine(Path.GetTempPath(), "sysmonitor_updater.bat");
 
                     string batContent = string.Format(
@@ -263,18 +333,21 @@ copy /y ""{0}"" ""{1}"" >nul 2>&1
 if %ERRORLEVEL% EQU 0 goto SUCCESS
 
 set /a RETRIES+=1
-if %RETRIES% LEQ 15 (
+if %RETRIES% LEQ 20 (
     timeout /t 1 /nobreak >nul
     goto RETRY_LOOP
 )
+exit /b 1
 
 :SUCCESS
 del ""{0}"" >nul 2>&1
-start """" ""{1}""
+start """" /d ""{3}"" ""{1}""
 del ""%~f0""
-", tempPath, currentExe, currentPid);
+", tempExePath, currentExe, currentPid, currentDir);
 
                     File.WriteAllText(batchScript, batContent, Encoding.Default);
+
+                    Log("Starting updater batch script: " + batchScript);
 
                     ProcessStartInfo psi = new ProcessStartInfo
                     {
@@ -295,6 +368,7 @@ del ""%~f0""
                 }
                 catch (Exception ex)
                 {
+                    Log("Update error: " + ex.ToString());
                     if (finishCallback != null) finishCallback(false, ex.Message);
                 }
             });
