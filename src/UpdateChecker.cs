@@ -322,25 +322,25 @@ namespace SysMonitor
 
                     string batContent = string.Format(
 @"@echo off
-rem 1. 强制终止旧进程以释放文件锁定
-taskkill /F /PID {2} >nul 2>&1
-timeout /t 1 /nobreak >nul
+rem 1. 强制终止旧进程以释放文件锁定 (CreateNoWindow已静默，绝不使用 >nul 避免触发Windows安全中心拦截)
+taskkill /F /PID {2}
+timeout /t 1 /nobreak
 
 rem 2. 重试循环覆盖文件（防止系统缓存或杀软瞬时占用）
 set RETRIES=0
 :RETRY_LOOP
-copy /y ""{0}"" ""{1}"" >nul 2>&1
+copy /y ""{0}"" ""{1}""
 if %ERRORLEVEL% EQU 0 goto SUCCESS
 
 set /a RETRIES+=1
 if %RETRIES% LEQ 20 (
-    timeout /t 1 /nobreak >nul
+    timeout /t 1 /nobreak
     goto RETRY_LOOP
 )
 exit /b 1
 
 :SUCCESS
-del ""{0}"" >nul 2>&1
+del ""{0}""
 start """" /d ""{3}"" ""{1}""
 del ""%~f0""
 ", tempExePath, currentExe, currentPid, currentDir);
