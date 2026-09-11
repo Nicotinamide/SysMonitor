@@ -59,6 +59,11 @@ namespace SysMonitor.Linux.UI
         private PointerPressedEventArgs _pointerPressedArgs;
         private bool _isDragging = false;
 
+        // Notification alert state
+        private bool? _prevAcOnline = null;
+        private bool _alertedLowBattery = false;
+        private bool _alertedFullBattery = false;
+
         public LinuxFloatingWindow()
         {
             Title = "SysMonitorWidget";
@@ -105,10 +110,45 @@ namespace SysMonitor.Linux.UI
                 _engine.PowerUpdated += (pwr) => Dispatcher.UIThread.Post(() => OnPowerUpdated(pwr));
                 _engine.NetworkUpdated += (net) => Dispatcher.UIThread.Post(() => OnNetworkUpdated(net));
                 _engine.ZeroTierUpdated += (zt) => Dispatcher.UIThread.Post(() => OnZeroTierUpdated(zt));
+                _engine.MoonDirectAlert += (addr, lat) => Dispatcher.UIThread.Post(() =>
+                {
+                    var i18n = I18n.Current;
+                    ShowNotification(i18n.NotifyMoonDirectTitle, string.Format(i18n.NotifyMoonDirectFormat, addr, lat), ToastType.Success, "⚡");
+                });
+                _engine.MoonRelayAlert += (addr) => Dispatcher.UIThread.Post(() =>
+                {
+                    var i18n = I18n.Current;
+                    ShowNotification(i18n.NotifyMoonRelayTitle, string.Format(i18n.NotifyMoonRelayFormat, addr), ToastType.Warning, "🔄");
+                });
             };
         }
 
         public LinuxTelemetryEngine Engine => _engine;
+
+        public void ShowNotification(string title, string text, ToastType type = ToastType.Info, string iconEmoji = "ℹ️")
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    LinuxToastNotification.Show(title, text, iconEmoji, type, () =>
+                    {
+                        if (_detailWindow != null)
+                        {
+                            if (!_detailWindow.IsVisible)
+                            {
+                                ToggleDetailWindow();
+                            }
+                            else
+                            {
+                                _detailWindow.Activate();
+                            }
+                        }
+                    });
+                }
+                catch { }
+            });
+        }
 
         private void BuildUi()
         {
@@ -310,7 +350,10 @@ namespace SysMonitor.Linux.UI
             grid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
 
             // Row 0: Dot + Moon (left), Status (right)
-            var spLeft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var leftGrid = new Grid { VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true };
+            leftGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            leftGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+
             _elZtDot = new Border
             {
                 Width = 6.5,
@@ -326,13 +369,16 @@ namespace SysMonitor.Linux.UI
                 FontSize = 10,
                 FontWeight = FontWeight.SemiBold,
                 Foreground = theme.TextPrimary,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
-            spLeft.Children.Add(_elZtDot);
-            spLeft.Children.Add(_tbZtTitle);
-            Grid.SetRow(spLeft, 0);
-            Grid.SetColumn(spLeft, 0);
-            grid.Children.Add(spLeft);
+            Grid.SetColumn(_elZtDot, 0);
+            Grid.SetColumn(_tbZtTitle, 1);
+            leftGrid.Children.Add(_elZtDot);
+            leftGrid.Children.Add(_tbZtTitle);
+            Grid.SetRow(leftGrid, 0);
+            Grid.SetColumn(leftGrid, 0);
+            grid.Children.Add(leftGrid);
 
             _tbZtStatus = new TextBlock
             {
@@ -341,6 +387,9 @@ namespace SysMonitor.Linux.UI
                 FontWeight = FontWeight.Bold,
                 Foreground = theme.AccentEmerald,
                 VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                TextAlignment = TextAlignment.Right,
+                Margin = new Thickness(4, 0, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
             Grid.SetRow(_tbZtStatus, 0);
@@ -683,6 +732,48 @@ namespace SysMonitor.Linux.UI
                 _tbWatts.Foreground = pBrush;
             }
 
+            // Power state transition notifications (AC plugged in / unplugged)
+            if (_prevAcOnline.HasValue && _prevAcOnline.Value != data.IsAcOnline && data.HasBattery)
+            {
+                if (data.IsAcOnline)
+                {
+                    ShowNotification(i18n.NotifyAcConnectedTitle, i18n.NotifyAcConnectedText, ToastType.Info, "⚡");
+                }
+                else
+                {
+                    ShowNotification(i18n.NotifyBatteryModeTitle, string.Format(i18n.NotifyBatteryModeFormat, data.BatteryPercent), ToastType.Info, "🔋");
+                }
+            }
+            _prevAcOnline = data.IsAcOnline;
+
+            // Low battery alert (<= 20%)
+            if (!data.IsAcOnline && data.BatteryPercent <= 20)
+            {
+                if (!_alertedLowBattery)
+                {
+                    _alertedLowBattery = true;
+                    ShowNotification(i18n.NotifyLowBatteryTitle, string.Format(i18n.NotifyLowBatteryFormat, data.BatteryPercent), ToastType.Warning, "🪫");
+                }
+            }
+            else if (data.IsAcOnline || data.BatteryPercent > 25)
+            {
+                _alertedLowBattery = false;
+            }
+
+            // Battery full alert (100%)
+            if (data.IsAcOnline && data.BatteryPercent >= 100)
+            {
+                if (!_alertedFullBattery)
+                {
+                    _alertedFullBattery = true;
+                    ShowNotification(i18n.NotifyBatteryFullTitle, i18n.NotifyBatteryFullText, ToastType.Success, "🔋");
+                }
+            }
+            else if (!data.IsAcOnline || data.BatteryPercent < 98)
+            {
+                _alertedFullBattery = false;
+            }
+
             _detailWindow?.UpdatePower(data);
         }
 
@@ -736,7 +827,7 @@ namespace SysMonitor.Linux.UI
                     if (data.TotalMoons > 0)
                     {
                         _tbZtTitle.Text = $"Moon {data.DirectMoons}/{data.TotalMoons}";
-                        _tbZtStatus.Text = isDirect ? $"{i18n.Direct} {data.MinLatency}ms" : i18n.Relay;
+                        _tbZtStatus.Text = isDirect ? (data.MinLatency >= 0 ? $"{data.MinLatency}ms" : i18n.Direct) : i18n.Relay;
                     }
                     else
                     {

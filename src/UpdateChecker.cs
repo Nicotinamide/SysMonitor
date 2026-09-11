@@ -36,7 +36,7 @@ namespace SysMonitor
 
     public static class UpdateChecker
     {
-        public const string CurrentVersion = "v1.0.11";
+        public const string CurrentVersion = "v1.0.12";
         public const string RepoOwner = "Nicotinamide";
         public const string RepoName = "SysMonitor";
 

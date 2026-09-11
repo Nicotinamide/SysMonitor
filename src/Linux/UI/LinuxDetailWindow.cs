@@ -978,6 +978,7 @@ namespace SysMonitor.Linux.UI
                 _memberDir.SaveEncryptedConfig(_txtSettingUrl.Text, _txtSettingNwid.Text, _txtSettingToken.Text);
                 overlay.IsVisible = false;
                 ShowToast("✓ " + (i18n.Lang == AppLanguage.Zh ? "设置已保存" : "Settings saved"));
+                _parentFloat?.ShowNotification(i18n.NotifySettingsSavedTitle, i18n.NotifySettingsSavedText, ToastType.Success, "💾");
                 UpdateZeroTierCardsVisibility();
             };
             Grid.SetColumn(btnSave, 2);

@@ -163,6 +163,21 @@ namespace SysMonitor.Linux
                 return direct.Count > 0 ? direct.Min(m => m.Latency) : -1;
             }
         }
+
+        public string GetSummaryText(TranslationSet i18n)
+        {
+            if (!IsRunning) return i18n.ZtOffline;
+            if (HasDroppedMoons) return string.Format(i18n.MoonDroppedSummary, Moons.Count(m => m.IsOffline));
+            if (TotalMoons > 0)
+            {
+                if (DirectMoons > 0)
+                {
+                    return MinLatency >= 0 ? string.Format("{0}ms", MinLatency) : i18n.Direct;
+                }
+                return i18n.Relay;
+            }
+            return i18n.ZtOnline;
+        }
     }
 
     public class LinuxMemberNode
@@ -195,6 +210,12 @@ namespace SysMonitor.Linux
         public event Action<LinuxPowerData> PowerUpdated;
         public event Action<LinuxNetworkData> NetworkUpdated;
         public event Action<LinuxZeroTierData> ZeroTierUpdated;
+        public event Action<string, int> MoonDirectAlert;
+        public event Action<string> MoonRelayAlert;
+
+        private Dictionary<string, bool> _moonLinkStates = new Dictionary<string, bool>();
+        private Dictionary<string, int> _moonRelayCounters = new Dictionary<string, int>();
+        private bool _moonInitialScanDone = false;
 
         private long _prevCpuIdle = 0;
         private long _prevCpuTotal = 0;
@@ -670,7 +691,7 @@ namespace SysMonitor.Linux
                                     foreach (var p in doc.RootElement.EnumerateArray())
                                     {
                                         string role = p.TryGetProperty("role", out var r) ? r.GetString() : "";
-                                        if (role == "MOON" || role == "PLANET")
+                                        if (role == "MOON")
                                         {
                                             var moon = new LinuxMoonNode
                                             {
@@ -692,8 +713,49 @@ namespace SysMonitor.Linux
                                             moon.IsDirect = moon.Latency >= 0 && !string.IsNullOrEmpty(moon.PhysicalAddress);
                                             moon.IsOffline = moon.Latency < 0 && string.IsNullOrEmpty(moon.PhysicalAddress);
                                             zt.Moons.Add(moon);
+
+                                            // Direct <-> Relay link state transition tracking
+                                            bool isDirect = moon.IsDirect;
+                                            if (!_moonLinkStates.ContainsKey(moon.Address))
+                                            {
+                                                _moonLinkStates[moon.Address] = isDirect;
+                                                _moonRelayCounters[moon.Address] = 0;
+                                            }
+                                            else
+                                            {
+                                                bool lastDirect = _moonLinkStates[moon.Address];
+                                                if (isDirect)
+                                                {
+                                                    _moonRelayCounters[moon.Address] = 0;
+                                                    if (!lastDirect)
+                                                    {
+                                                        _moonLinkStates[moon.Address] = true;
+                                                        if (_moonInitialScanDone)
+                                                        {
+                                                            MoonDirectAlert?.Invoke(moon.Address, moon.Latency);
+                                                        }
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    if (lastDirect)
+                                                    {
+                                                        if (!_moonRelayCounters.ContainsKey(moon.Address)) _moonRelayCounters[moon.Address] = 0;
+                                                        _moonRelayCounters[moon.Address]++;
+                                                        if (_moonRelayCounters[moon.Address] >= 2)
+                                                        {
+                                                            _moonLinkStates[moon.Address] = false;
+                                                            if (_moonInitialScanDone)
+                                                            {
+                                                                MoonRelayAlert?.Invoke(moon.Address);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
+                                    _moonInitialScanDone = true;
                                 }
                             }
                         }

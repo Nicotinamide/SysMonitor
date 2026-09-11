@@ -271,7 +271,10 @@ namespace SysMonitor.Linux.UI
                 BorderBrush = Current.InputBorder,
                 BorderThickness = new Thickness(0.8),
                 CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(6, 4),
+                Height = 28,
+                MinHeight = 28,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(7, 0, 7, 0),
                 FontSize = 11,
                 FontFamily = new FontFamily("Consolas, Courier New, monospace, Segoe UI")
             };
