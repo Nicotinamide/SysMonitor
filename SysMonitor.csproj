@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -16,16 +16,32 @@
     <StripSymbols>true</StripSymbols>
     <OptimizationPreference>Speed</OptimizationPreference>
     <InvariantGlobalization>true</InvariantGlobalization>
-    
-    <!-- 允许无剪裁警告（Avalonia 11+ AOT 已深度适配） -->
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
   </PropertyGroup>
 
+  <!-- 排除 tools 目录中的辅助编译脚本，避免产生多入口冲突 CS0017 -->
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.2.0" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.2.0" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.0" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.0" />
+    <Compile Remove="tools\**" />
+    <None Include="tools\**" />
+  </ItemGroup>
+
+  <!-- Linux 平台：仅编译 Linux 原生引擎与平台通用逻辑，排除 Windows 专有 WPF 代码 -->
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <Compile Remove="src\MainWindow.cs" />
+    <Compile Remove="src\DetailWindow.cs" />
+    <Compile Remove="src\ToastNotification.cs" />
+    <Compile Remove="src\AppTheme.cs" />
+    <Compile Remove="src\Monitors.cs" />
+    <Compile Remove="src\Program.cs" />
+    <Compile Remove="src\Models.cs" />
+    <Compile Remove="src\MemberDirectory.cs" />
+    <Compile Remove="src\AppSettings.cs" />
+    <Compile Remove="src\FlagAssets.cs" />
+  </ItemGroup>
+
+  <!-- Windows 平台：排除 Linux 专用驱动与 Linux 入口 -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <Compile Remove="src\Linux\**" />
   </ItemGroup>
 
   <!-- 包含多分辨率图标和桌面配置 -->
@@ -33,7 +49,7 @@
     <Content Include="app.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="scripts/sysmonitor.desktop">
+    <Content Include="scripts\sysmonitor.desktop">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

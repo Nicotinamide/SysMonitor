@@ -17,15 +17,15 @@ jobs:
   # ==========================================
   build-linux-x64:
     name: Build Linux x86_64 (Native AOT)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Native Toolchain & FreeDesktop Libs
+      - name: Install Native Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang zlib1g-dev libkrb5-dev libx11-dev libice-dev libsm-dev libfontconfig1-dev
+          sudo apt-get install -y clang zlib1g-dev libkrb5-dev
 
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
@@ -57,33 +57,28 @@ jobs:
           path: sysmonitor-linux-x64.tar.gz
 
   # ==========================================
-  # 2. Linux ARM64 (aarch64) 原生构建
+  # 2. Linux ARM64 (aarch64) 原生单文件构建
   # ==========================================
   build-linux-arm64:
     name: Build Linux ARM64 (aarch64)
-    runs-on: ubuntu-24.04-arm
-    continue-on-error: true
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Install Native Toolchain & FreeDesktop Libs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang zlib1g-dev libkrb5-dev libx11-dev libice-dev libsm-dev libfontconfig1-dev
 
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish Native AOT (linux-arm64)
+      - name: Publish Linux ARM64 Single-File
         run: |
           dotnet publish SysMonitor.csproj \
             -r linux-arm64 \
             -c Release \
-            -p:PublishAot=true \
+            -p:PublishAot=false \
             -p:PublishSingleFile=true \
+            --self-contained true \
             -p:StripSymbols=true \
             -o ./dist/linux-arm64
 
@@ -102,7 +97,7 @@ jobs:
           path: sysmonitor-linux-arm64.tar.gz
 
   # ==========================================
-  # 3. Windows x64 构建 (.NET Framework & AOT)
+  # 3. Windows x64 构建 (.NET Framework 原生单文件)
   # ==========================================
   build-windows-x64:
     name: Build Windows x64 (Native)
@@ -125,7 +120,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sysmonitor-windows-x64
-          path: sysmonitor-windows-x64.zip
+          path: |
+            SysMonitor.exe
+            sysmonitor-windows-x64.zip
 
   # ==========================================
   # 4. 发布 GitHub Release (在 Tag 或 Release 时触发)
@@ -146,5 +143,6 @@ jobs:
             sysmonitor-linux-x64/sysmonitor-linux-x64.tar.gz
             sysmonitor-linux-arm64/sysmonitor-linux-arm64.tar.gz
             sysmonitor-windows-x64/sysmonitor-windows-x64.zip
+            sysmonitor-windows-x64/SysMonitor.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

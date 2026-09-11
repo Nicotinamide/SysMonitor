@@ -80,9 +80,12 @@ namespace SysMonitor
                 _cardMember.Visibility = HasConfiguredToken ? Visibility.Visible : Visibility.Collapsed;
             }
         }
+        public DateTime LastDeactivatedTime { get; private set; }
         private TextBlock _tbUpdateStatus;
         private StackPanel _pnlUpdateActions;
         private Button _btnPullUpdate;
+        private string _latestDownloadUrl;
+        private string _latestReleasePageUrl;
         private TextBox _tbMemberSearch;
         private TextBlock _tbMemberSearchPlaceholder;
         private Button _btnMemberClear;
@@ -144,6 +147,13 @@ namespace SysMonitor
             UseLayoutRounding = true;
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
+
+            // 当鼠标点击了其他窗口、桌面或外部区域导致详情页失焦时，自动收起关闭，避免遮挡用户其他工作
+            Deactivated += delegate
+            {
+                LastDeactivatedTime = DateTime.UtcNow;
+                Hide();
+            };
 
             _toastTimer = new DispatcherTimer();
             _toastTimer.Interval = TimeSpan.FromSeconds(2.5);
@@ -301,13 +311,6 @@ namespace SysMonitor
             headerGrid.Children.Add(titleSp);
 
             StackPanel topBtns = new StackPanel { Orientation = Orientation.Horizontal };
-            Button btnUpdate = AppTheme.CreateIconButton("🔄", i18n.CheckUpdate, delegate
-            {
-                CheckForAppUpdates(true);
-            }, 11);
-            btnUpdate.Margin = new Thickness(0, 0, 4, 0);
-            topBtns.Children.Add(btnUpdate);
-
             Button btnSettings = AppTheme.CreateIconButton("⚙", i18n.SettingsTitle, delegate
             {
                 ToggleSettingsView();
@@ -1030,30 +1033,17 @@ namespace SysMonitor
             upHeadGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             upHeadGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            StackPanel vSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             TextBlock lblVer = CreateMutedText(theme, string.Format(i18n.CurrentVersionFormat, UpdateChecker.CurrentVersion));
             lblVer.FontWeight = FontWeights.SemiBold;
-            vSp.Children.Add(lblVer);
-            Grid.SetColumn(vSp, 0);
-            upHeadGrid.Children.Add(vSp);
+            Grid.SetColumn(lblVer, 0);
+            upHeadGrid.Children.Add(lblVer);
 
-            StackPanel upBtnSp = new StackPanel { Orientation = Orientation.Horizontal };
-            Button btnCheckUp = new Button
-            {
-                Content = "🔄 " + i18n.CheckUpdate,
-                FontSize = 10,
-                Foreground = theme.AccentBlue,
-                Background = new SolidColorBrush(Color.FromArgb(25, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(80, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(6, 2, 6, 2),
-                Cursor = Cursors.Hand
-            };
-            btnCheckUp.Click += delegate { CheckForAppUpdates(true); };
-            upBtnSp.Children.Add(btnCheckUp);
+            TextBlock lblBranch = CreateMutedText(theme, "main");
+            lblBranch.FontSize = 9.5;
+            lblBranch.Opacity = 0.6;
+            Grid.SetColumn(lblBranch, 1);
+            upHeadGrid.Children.Add(lblBranch);
 
-            Grid.SetColumn(upBtnSp, 1);
-            upHeadGrid.Children.Add(upBtnSp);
             updateSp.Children.Add(upHeadGrid);
 
             // Update status text
@@ -1068,8 +1058,24 @@ namespace SysMonitor
             };
             updateSp.Children.Add(_tbUpdateStatus);
 
-            // Action row: Pull update button & open github
-            _pnlUpdateActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0), Visibility = Visibility.Collapsed };
+            // Action row: 检查更新、拉取更新（仅有更新时显示）、GitHub 放在同一排
+            _pnlUpdateActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
+
+            Button btnCheckUp = new Button
+            {
+                Content = "🔄 " + i18n.CheckUpdate,
+                FontSize = 10,
+                Foreground = theme.AccentBlue,
+                Background = new SolidColorBrush(Color.FromArgb(25, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
+                BorderThickness = new Thickness(0.8),
+                Padding = new Thickness(8, 3, 8, 3),
+                Margin = new Thickness(0, 0, 6, 0),
+                Cursor = Cursors.Hand
+            };
+            btnCheckUp.Click += delegate { CheckForAppUpdates(true); };
+            _pnlUpdateActions.Children.Add(btnCheckUp);
+
             _btnPullUpdate = new Button
             {
                 Content = "⬇ " + i18n.DownloadUpdate,
@@ -1080,7 +1086,36 @@ namespace SysMonitor
                 BorderThickness = new Thickness(0.8),
                 Padding = new Thickness(8, 3, 8, 3),
                 Margin = new Thickness(0, 0, 6, 0),
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Hand,
+                Visibility = Visibility.Collapsed
+            };
+            _btnPullUpdate.Click += delegate
+            {
+                if (!string.IsNullOrEmpty(_latestDownloadUrl))
+                {
+                    _tbUpdateStatus.Text = "⏳ " + I18n.Current.CheckingUpdate;
+                    _btnPullUpdate.IsEnabled = false;
+                    UpdateChecker.DownloadAndApplyUpdateAsync(_latestDownloadUrl,
+                        delegate(int pct)
+                        {
+                            Dispatcher.BeginInvoke(new Action(delegate
+                            {
+                                _tbUpdateStatus.Text = string.Format("⏳ 下载中... {0}%", pct);
+                            }));
+                        },
+                        delegate(bool ok, string msg)
+                        {
+                            Dispatcher.BeginInvoke(new Action(delegate
+                            {
+                                _btnPullUpdate.IsEnabled = true;
+                                _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
+                            }));
+                        });
+                }
+                else if (!string.IsNullOrEmpty(_latestReleasePageUrl))
+                {
+                    try { Process.Start(_latestReleasePageUrl); } catch { }
+                }
             };
             _pnlUpdateActions.Children.Add(_btnPullUpdate);
 
@@ -1235,9 +1270,9 @@ namespace SysMonitor
                 _tbUpdateStatus.Text = "⏳ " + I18n.Current.CheckingUpdate;
                 _tbUpdateStatus.Foreground = AppTheme.Current.TextMuted;
             }
-            if (_pnlUpdateActions != null)
+            if (_btnPullUpdate != null)
             {
-                _pnlUpdateActions.Visibility = Visibility.Collapsed;
+                _btnPullUpdate.Visibility = Visibility.Collapsed;
             }
 
             UpdateChecker.CheckForUpdatesAsync(delegate(UpdateInfo info)
@@ -1252,12 +1287,15 @@ namespace SysMonitor
                     {
                         _tbUpdateStatus.Text = string.Format("✕ {0}: {1}", i18n.UpdateFailed, info.ErrorMessage);
                         _tbUpdateStatus.Foreground = theme.AccentRed;
-                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
+                        if (_btnPullUpdate != null) _btnPullUpdate.Visibility = Visibility.Collapsed;
                         return;
                     }
 
                     if (info.HasUpdate)
                     {
+                        _latestDownloadUrl = info.DownloadUrl;
+                        _latestReleasePageUrl = info.ReleasePageUrl;
+
                         string notes = !string.IsNullOrEmpty(info.ReleaseNotes) ? ("\n" + info.ReleaseNotes.Trim()) : "";
                         _tbUpdateStatus.Text = string.Format("🚀 {0}: {1}{2}", i18n.NewVersionFound, info.LatestVersion, notes);
                         _tbUpdateStatus.Foreground = theme.AccentEmerald;
@@ -1265,36 +1303,8 @@ namespace SysMonitor
                         if (_btnPullUpdate != null)
                         {
                             _btnPullUpdate.Content = "⬇ " + i18n.DownloadUpdate + " (" + info.LatestVersion + ")";
-                            _btnPullUpdate.Click += delegate
-                            {
-                                if (!string.IsNullOrEmpty(info.DownloadUrl))
-                                {
-                                    _tbUpdateStatus.Text = "⏳ " + i18n.CheckingUpdate;
-                                    _btnPullUpdate.IsEnabled = false;
-                                    UpdateChecker.DownloadAndApplyUpdateAsync(info.DownloadUrl,
-                                        delegate(int pct)
-                                        {
-                                            Dispatcher.BeginInvoke(new Action(delegate
-                                            {
-                                                _tbUpdateStatus.Text = string.Format("⏳ 下载中... {0}%", pct);
-                                            }));
-                                        },
-                                        delegate(bool ok, string msg)
-                                        {
-                                            Dispatcher.BeginInvoke(new Action(delegate
-                                            {
-                                                _btnPullUpdate.IsEnabled = true;
-                                                _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
-                                            }));
-                                        });
-                                }
-                                else
-                                {
-                                    try { Process.Start(info.ReleasePageUrl); } catch { }
-                                }
-                            };
+                            _btnPullUpdate.Visibility = Visibility.Visible;
                         }
-                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
                     }
                     else if (info.IsCommitBased)
                     {
@@ -1302,13 +1312,13 @@ namespace SysMonitor
                         _tbUpdateStatus.Text = string.Format("{0} ({1})\nGitHub: [{2}]{3}",
                             i18n.AlreadyLatest, UpdateChecker.CurrentVersion, info.LatestCommitSha, msg);
                         _tbUpdateStatus.Foreground = theme.AccentEmerald;
-                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
+                        if (_btnPullUpdate != null) _btnPullUpdate.Visibility = Visibility.Collapsed;
                     }
                     else
                     {
                         _tbUpdateStatus.Text = string.Format("{0} ({1})", i18n.AlreadyLatest, UpdateChecker.CurrentVersion);
                         _tbUpdateStatus.Foreground = theme.AccentEmerald;
-                        if (_pnlUpdateActions != null) _pnlUpdateActions.Visibility = Visibility.Visible;
+                        if (_btnPullUpdate != null) _btnPullUpdate.Visibility = Visibility.Collapsed;
                     }
                 }));
             });

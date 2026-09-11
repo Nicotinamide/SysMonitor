@@ -24,7 +24,9 @@ namespace SysMonitor
         {
             try
             {
-                string logFile = @"C:\Users\4955\.gemini\antigravity\scratch\SysMonitor_Native\debug.log";
+                string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SysMonitor");
+                if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+                string logFile = System.IO.Path.Combine(dir, "debug.log");
                 System.IO.File.AppendAllText(logFile, string.Format("[{0:HH:mm:ss.fff}] [PID:{1}] {2}\r\n", DateTime.Now, Process.GetCurrentProcess().Id, msg));
             }
             catch { }

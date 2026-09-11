@@ -902,8 +902,14 @@ namespace SysMonitor
             }
             else
             {
+                // 若刚刚因失焦而隐藏（例如点击首页微件收起），避免再次展开，保持收起状态
+                if ((DateTime.UtcNow - _detailWin.LastDeactivatedTime).TotalMilliseconds < 350)
+                {
+                    return;
+                }
                 _detailWin.PositionNear(Left, Top, Width, Height);
                 _detailWin.Show();
+                _detailWin.Activate();
             }
         }
 
