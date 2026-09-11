@@ -11,7 +11,7 @@ namespace SysMonitor
         public static event Action SettingsChanged;
 
         private static string _settingsFile;
-        private static ThemeMode _theme = ThemeMode.Dark;
+        private static ThemeMode _theme = ThemeMode.Light;
         private static AppLanguage _lang = AppLanguage.Zh;
 
         public static ThemeMode Theme
@@ -137,7 +137,7 @@ namespace SysMonitor
                         if (dict.ContainsKey("theme"))
                         {
                             string t = dict["theme"].ToString().Trim().ToLowerInvariant();
-                            _theme = t == "light" ? ThemeMode.Light : ThemeMode.Dark;
+                            _theme = t == "dark" ? ThemeMode.Dark : ThemeMode.Light;
                         }
                         if (dict.ContainsKey("language"))
                         {

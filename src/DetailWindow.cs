@@ -1208,7 +1208,7 @@ namespace SysMonitor
                 {
                     icon = "🔗";
                     name = (i18n.Lang == AppLanguage.Zh) ? "互联" : "ZT";
-                    fullTitle = i18n.ModZtTitle + (HasConfiguredToken ? "" : " (" + i18n.NoTokenHint + ")");
+                    fullTitle = i18n.ModZtTitle;
                     col = theme.AccentEmerald.Color;
                 }
                 else if (key == AppSettings.ModuleCompute)

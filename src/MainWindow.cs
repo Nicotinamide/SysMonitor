@@ -200,21 +200,23 @@ namespace SysMonitor
             if (_lastZt != null) OnZeroTierUpdated(_lastZt);
         }
 
+        private bool _prevZtAvailable = true;
+
         private void BuildUi()
         {
             ThemePalette theme = AppTheme.Current;
             TranslationSet i18n = I18n.Current;
 
-            bool hasToken = _detailWin != null && _detailWin.HasConfiguredToken;
+            bool ztAvailable = _lastZt == null || (_lastZt.IsInstalled && _lastZt.IsRunning);
 
             System.Collections.Generic.List<string> rawActiveMods = AppSettings.GetActiveModules();
             System.Collections.Generic.List<string> activeMods = new System.Collections.Generic.List<string>();
             for (int i = 0; i < rawActiveMods.Count; i++)
             {
                 string m = rawActiveMods[i];
-                if (m == AppSettings.ModuleZeroTier && !hasToken)
+                if (m == AppSettings.ModuleZeroTier && !ztAvailable)
                 {
-                    continue; // Token unconfigured: omit ZeroTier from homepage
+                    continue; // 虚拟局域网有的话就显示，没有就不显示，不受 token 影响
                 }
                 activeMods.Add(m);
             }
@@ -1307,11 +1309,18 @@ namespace SysMonitor
 
         private void OnZeroTierUpdated(ZeroTierData data)
         {
+            bool currentZtAvailable = data != null && data.IsInstalled && data.IsRunning;
+            if (_lastZt != null && currentZtAvailable != _prevZtAvailable)
+            {
+                _prevZtAvailable = currentZtAvailable;
+                Dispatcher.BeginInvoke(new Action(RebuildUi));
+            }
+            _prevZtAvailable = currentZtAvailable;
             _lastZt = data;
+
             Dispatcher.Invoke(new Action(delegate
             {
                 _ztInstalled = data.IsInstalled;
-                bool hasToken = _detailWin != null && _detailWin.HasConfiguredToken;
 
                 if (_tbTile3Title != null && _tbTile3Status != null && _elTile3Dot != null)
                 {
@@ -1324,12 +1333,12 @@ namespace SysMonitor
                         _tbTile3Status.Foreground = AppTheme.Current.TextMuted;
                         if (_tbTile3Sub != null) _tbTile3Sub.Text = "--";
                     }
-                    else if (!hasToken)
+                    else if (!data.IsRunning)
                     {
                         _elTile3Dot.Fill = AppTheme.Current.TextMuted;
                         _tbTile3Title.Text = "ZeroTier";
                         _tbTile3Title.Foreground = AppTheme.Current.TextSecondary;
-                        _tbTile3Status.Text = I18n.Current.NoTokenHint;
+                        _tbTile3Status.Text = I18n.Current.ZtOffline;
                         _tbTile3Status.Foreground = AppTheme.Current.TextMuted;
                         if (_tbTile3Sub != null) _tbTile3Sub.Text = !string.IsNullOrEmpty(data.LocalNodeId) ? ("Node: " + data.LocalNodeId) : "--";
                     }
@@ -1359,7 +1368,7 @@ namespace SysMonitor
                             }
                             else
                             {
-                                _tbTile3Title.Text = "Moon";
+                                _tbTile3Title.Text = "ZeroTier";
                             }
                         }
 

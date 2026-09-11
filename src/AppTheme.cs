@@ -144,7 +144,7 @@ namespace SysMonitor
 
     public static class AppTheme
     {
-        private static ThemePalette _current = ThemePalette.CreateDark();
+        private static ThemePalette _current = ThemePalette.CreateLight();
 
         public static ThemePalette Current
         {
