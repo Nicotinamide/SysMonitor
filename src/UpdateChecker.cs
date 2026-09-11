@@ -36,7 +36,7 @@ namespace SysMonitor
 
     public static class UpdateChecker
     {
-        public const string CurrentVersion = "v1.0.0";
+        public const string CurrentVersion = "v1.0.2";
         public const string RepoOwner = "Nicotinamide";
         public const string RepoName = "SysMonitor";
 
@@ -247,16 +247,32 @@ namespace SysMonitor
 
                     // 替换并重启
                     string currentExe = Process.GetCurrentProcess().MainModule.FileName;
+                    int currentPid = Process.GetCurrentProcess().Id;
                     string batchScript = Path.Combine(Path.GetTempPath(), "sysmonitor_updater.bat");
 
                     string batContent = string.Format(
 @"@echo off
+rem 1. 强制终止旧进程以释放文件锁定
+taskkill /F /PID {2} >nul 2>&1
 timeout /t 1 /nobreak >nul
-copy /y ""{0}"" ""{1}"" >nul
-del ""{0}"" >nul
+
+rem 2. 重试循环覆盖文件（防止系统缓存或杀软瞬时占用）
+set RETRIES=0
+:RETRY_LOOP
+copy /y ""{0}"" ""{1}"" >nul 2>&1
+if %ERRORLEVEL% EQU 0 goto SUCCESS
+
+set /a RETRIES+=1
+if %RETRIES% LEQ 15 (
+    timeout /t 1 /nobreak >nul
+    goto RETRY_LOOP
+)
+
+:SUCCESS
+del ""{0}"" >nul 2>&1
 start """" ""{1}""
 del ""%~f0""
-", tempPath, currentExe);
+", tempPath, currentExe, currentPid);
 
                     File.WriteAllText(batchScript, batContent, Encoding.Default);
 
@@ -268,7 +284,14 @@ del ""%~f0""
                     };
                     Process.Start(psi);
 
-                    if (finishCallback != null) finishCallback(true, "即将重启更新...");
+                    if (finishCallback != null) finishCallback(true, "下载完成，正在重启更新...");
+
+                    // 主动退出当前进程，释放对 EXE 文件的独占锁定
+                    ThreadPool.QueueUserWorkItem(delegate
+                    {
+                        Thread.Sleep(300);
+                        Environment.Exit(0);
+                    });
                 }
                 catch (Exception ex)
                 {
