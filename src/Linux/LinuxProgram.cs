@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -9,6 +11,10 @@ namespace SysMonitor.Linux
 {
     public static class LinuxProgram
     {
+        [DllImport("kernel32.dll")]
+        private static extern bool AttachConsole(int dwProcessId);
+        private const int ATTACH_PARENT_PROCESS = -1;
+
         // Avalonia 启动构建器（提供平台探针、矢量字体与原生桌面生命周期集成）
         public static AppBuilder BuildAvaloniaApp()
             => AppBuilder.Configure<LinuxApp>()
@@ -19,7 +25,21 @@ namespace SysMonitor.Linux
         [STAThread]
         public static void Main(string[] args)
         {
-            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            string crashLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "sysmonitor_crash.log");
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                try { File.AppendAllText(crashLog, $"UnhandledException: {e.ExceptionObject}\n"); } catch { }
+            };
+            TaskScheduler.UnobservedTaskException += (s, e) =>
+            {
+                try { File.AppendAllText(crashLog, $"UnobservedTaskException: {e.Exception}\n"); } catch { }
+            };
+
+            if (OperatingSystem.IsWindows())
+            {
+                try { AttachConsole(ATTACH_PARENT_PROCESS); } catch { }
+            }
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
 
             bool cliMode = false;
             bool statusMode = false;
@@ -50,19 +70,23 @@ namespace SysMonitor.Linux
                 return;
             }
 
-            // 桌面环境智能探测: 检查是否有图形显示服务 (X11 / Wayland / WSLg)
-            bool hasDisplay = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")) ||
+            // 桌面环境智能探测: 检查是否有图形显示服务 (Windows / macOS / X11 / Wayland / WSLg)
+            bool hasDisplay = OperatingSystem.IsWindows() ||
+                              OperatingSystem.IsMacOS() ||
+                              !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")) ||
                               !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
 
             if (!cliMode && hasDisplay)
             {
                 try
                 {
-                    BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+                    int exitCode = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+                    try { File.AppendAllText(crashLog, $"StartWithClassicDesktopLifetime returned exitCode={exitCode}\n"); } catch { }
                     return;
                 }
                 catch (Exception ex)
                 {
+                    try { File.AppendAllText(crashLog, $"StartWithClassicDesktopLifetime exception: {ex}\n"); } catch { }
                     Console.WriteLine("[SysMonitor] 无法启动桌面图形视窗: " + ex.Message);
                     Console.WriteLine("[SysMonitor] 正在自动切换至终端控制台仪表盘...");
                 }

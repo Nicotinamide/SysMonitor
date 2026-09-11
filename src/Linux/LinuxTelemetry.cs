@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -238,8 +239,94 @@ namespace SysMonitor.Linux
         private Timer _timer;
         private bool _isUpdating = false;
 
+        #region Windows Native Interop & Telemetry
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SYSTEM_BATTERY_STATE
+        {
+            [MarshalAs(UnmanagedType.I1)] public bool AcOnLine;
+            [MarshalAs(UnmanagedType.I1)] public bool BatteryPresent;
+            [MarshalAs(UnmanagedType.I1)] public bool Charging;
+            [MarshalAs(UnmanagedType.I1)] public bool Discharging;
+            public byte Spare1, Spare2, Spare3, Spare4;
+            public uint MaxCapacity;
+            public uint RemainingCapacity;
+            public int Rate;
+            public uint EstimatedTime;
+            public uint DefaultAlert1;
+            public uint DefaultAlert2;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SYSTEM_POWER_STATUS
+        {
+            public byte ACLineStatus;
+            public byte BatteryFlag;
+            public byte BatteryLifePercent;
+            public byte SystemStatusFlag;
+            public int BatteryLifeTime;
+            public int BatteryFullLifeTime;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        public class MEMORYSTATUSEX
+        {
+            public uint dwLength;
+            public uint dwMemoryLoad;
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+            public MEMORYSTATUSEX() { dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX)); }
+        }
+
+        [DllImport("powrprof.dll")]
+        public static extern uint CallNtPowerInformation(int InformationLevel, IntPtr lpInputBuffer, uint nInputBufferSize, out SYSTEM_BATTERY_STATE lpOutputBuffer, uint nOutputBufferSize);
+
+        [DllImport("kernel32.dll")]
+        public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS sps);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX lpBuffer);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetSystemTimes(out long lpIdleTime, out long lpKernelTime, out long lpUserTime);
+
+        private long _prevWinCpuIdle;
+        private long _prevWinCpuKernel;
+        private long _prevWinCpuUser;
+        #endregion
+
         public LinuxTelemetryEngine()
         {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                try { GetSystemTimes(out _prevWinCpuIdle, out _prevWinCpuKernel, out _prevWinCpuUser); } catch { }
+                try
+                {
+                    long rx = 0, tx = 0;
+                    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                    {
+                        if (ni.OperationalStatus != OperationalStatus.Up || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                        string desc = ni.Description.ToLower();
+                        string name = ni.Name.ToLower();
+                        if (desc.Contains("zerotier") || desc.Contains("virtual") || desc.Contains("vpn") || desc.Contains("pseudo") ||
+                            desc.Contains("mihomo") || desc.Contains("clash") || desc.Contains("tun") || desc.Contains("tap") || desc.Contains("wsl") ||
+                            name.Contains("mihomo") || name.Contains("clash") || name.Contains("zerotier") || name.Contains("vethernet"))
+                            continue;
+                        var s = ni.GetIPStatistics();
+                        rx += s.BytesReceived;
+                        tx += s.BytesSent;
+                    }
+                    _prevRxBytes = rx;
+                    _prevTxBytes = tx;
+                    _prevNetTime = DateTime.UtcNow;
+                }
+                catch { }
+            }
+
             _timer = new Timer(OnTimerTick, null, 0, 1000);
             LinuxSettings.SettingsChanged += () =>
             {
@@ -280,6 +367,40 @@ namespace SysMonitor.Linux
         {
             try
             {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    // 1. Windows RAM via GlobalMemoryStatusEx
+                    var mem = new MEMORYSTATUSEX();
+                    GlobalMemoryStatusEx(mem);
+                    double winTotalGb = Math.Round(mem.ullTotalPhys / (1024.0 * 1024.0 * 1024.0), 1);
+                    double winUsedGb = Math.Round((mem.ullTotalPhys - mem.ullAvailPhys) / (1024.0 * 1024.0 * 1024.0), 1);
+
+                    // 2. Windows CPU via GetSystemTimes
+                    GetSystemTimes(out long currIdle, out long currKernel, out long currUser);
+                    long sysDiff = (currKernel - _prevWinCpuKernel) + (currUser - _prevWinCpuUser);
+                    long idleDiff = currIdle - _prevWinCpuIdle;
+                    long busy = sysDiff - idleDiff;
+
+                    double winCpu = 0.0;
+                    if (sysDiff > 0 && _prevWinCpuKernel > 0)
+                    {
+                        winCpu = Math.Max(0.0, Math.Min(100.0, Math.Round((busy * 100.0) / sysDiff, 1)));
+                    }
+
+                    _prevWinCpuIdle = currIdle;
+                    _prevWinCpuKernel = currKernel;
+                    _prevWinCpuUser = currUser;
+
+                    SystemLoadUpdated?.Invoke(new LinuxSystemLoadData
+                    {
+                        CpuPercent = winCpu,
+                        RamUsedGb = winUsedGb,
+                        RamTotalGb = winTotalGb,
+                        RamPercent = (int)mem.dwMemoryLoad
+                    });
+                    return;
+                }
+
                 // 1. CPU Usage from /proc/stat
                 double cpuPercent = 0.0;
                 if (File.Exists("/proc/stat"))
@@ -355,6 +476,77 @@ namespace SysMonitor.Linux
             try
             {
                 var p = new LinuxPowerData();
+
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    GetSystemPowerStatus(out SYSTEM_POWER_STATUS sps);
+                    SYSTEM_BATTERY_STATE sbs = default;
+                    try
+                    {
+                        CallNtPowerInformation(5, IntPtr.Zero, 0, out sbs, (uint)Marshal.SizeOf(typeof(SYSTEM_BATTERY_STATE)));
+                    }
+                    catch { }
+
+                    bool hasBattery = sbs.BatteryPresent && (sps.BatteryFlag != 128) && (sps.BatteryLifePercent != 255);
+                    p.HasBattery = hasBattery;
+
+                    if (!hasBattery)
+                    {
+                        p.BatteryPercent = 100;
+                        p.IsAcOnline = true;
+                        p.IsCharging = false;
+                        p.IsDischarging = false;
+                        p.Watts = 0.0;
+                        p.StateKind = LinuxPowerStateKind.DesktopAc;
+                    }
+                    else
+                    {
+                        p.BatteryPercent = sps.BatteryLifePercent <= 100 ? sps.BatteryLifePercent : 100;
+                        p.IsAcOnline = (sps.ACLineStatus == 1 || sbs.AcOnLine);
+                        bool isChargingFlag = (sps.BatteryFlag & 8) != 0;
+                        bool isCharging = sbs.Charging || isChargingFlag || sbs.Rate > 0;
+                        p.IsCharging = isCharging;
+                        p.IsDischarging = !p.IsAcOnline;
+
+                        if (p.IsAcOnline)
+                        {
+                            if (isCharging && sbs.Rate > 0)
+                            {
+                                p.Watts = Math.Round(Math.Abs(sbs.Rate) / 1000.0, 1);
+                                p.StateKind = LinuxPowerStateKind.ChargingFast;
+                                if (sbs.MaxCapacity > sbs.RemainingCapacity && sbs.Rate > 0)
+                                {
+                                    p.DischargingHours = (double)(sbs.MaxCapacity - sbs.RemainingCapacity) / sbs.Rate;
+                                }
+                            }
+                            else if (p.BatteryPercent >= 98)
+                            {
+                                p.Watts = 0.0;
+                                p.StateKind = LinuxPowerStateKind.ChargedFull;
+                            }
+                            else
+                            {
+                                p.Watts = 0.0;
+                                p.StateKind = LinuxPowerStateKind.AcDirect;
+                            }
+                        }
+                        else
+                        {
+                            p.Watts = Math.Round(Math.Abs(sbs.Rate) / 1000.0, 1);
+                            p.StateKind = p.BatteryPercent <= 20 ? LinuxPowerStateKind.DischargingLow : LinuxPowerStateKind.DischargingNormal;
+                            if (sbs.Rate > 0 && sbs.RemainingCapacity > 0)
+                            {
+                                p.DischargingHours = (double)sbs.RemainingCapacity / sbs.Rate;
+                            }
+                        }
+                    }
+
+                    p.StatusText = p.GetStatusText(I18n.Current);
+                    p.EstimatedTimeStr = p.GetEstimatedTimeText(I18n.Current);
+                    PowerUpdated?.Invoke(p);
+                    return;
+                }
+
                 const string powerSupplyPath = "/sys/class/power_supply";
                 bool foundBattery = false;
 
@@ -483,6 +675,12 @@ namespace SysMonitor.Linux
             {
                 var net = new LinuxNetworkData();
 
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    UpdateNetworkWindows(net);
+                    return;
+                }
+
                 long totalRx = 0;
                 long totalTx = 0;
 
@@ -535,6 +733,106 @@ namespace SysMonitor.Linux
                 net.ActiveInterface = !string.IsNullOrEmpty(activeIface) ? activeIface : "eth0";
                 net.LocalIp = GetInterfaceIpv4(net.ActiveInterface);
                 net.LinkSpeedStr = GetInterfaceSpeed(net.ActiveInterface);
+
+                // GeoIP
+                net.PublicIp = !string.IsNullOrEmpty(_cachedPublicIp) ? _cachedPublicIp : I18n.Current.NetFetching;
+                net.CountryCode = _cachedCountryCode;
+                bool isEn = LinuxSettings.Language == AppLanguage.En;
+                net.Country = isEn ? (!string.IsNullOrEmpty(_cachedCountryEn) ? _cachedCountryEn : _cachedCountryZh)
+                                   : (!string.IsNullOrEmpty(_cachedCountryZh) ? _cachedCountryZh : _cachedCountryEn);
+                net.City = isEn ? (!string.IsNullOrEmpty(_cachedCityEn) ? _cachedCityEn : _cachedCityZh)
+                                : (!string.IsNullOrEmpty(_cachedCityZh) ? _cachedCityZh : _cachedCityEn);
+                net.Isp = _cachedIsp;
+
+                NetworkUpdated?.Invoke(net);
+            }
+            catch { }
+        }
+
+        private void UpdateNetworkWindows(LinuxNetworkData net)
+        {
+            try
+            {
+                long totalRx = 0;
+                long totalTx = 0;
+                var ifaces = NetworkInterface.GetAllNetworkInterfaces();
+                foreach (var ni in ifaces)
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    string desc = ni.Description.ToLower();
+                    string name = ni.Name.ToLower();
+                    if (desc.Contains("zerotier") || desc.Contains("virtual") || desc.Contains("vpn") || desc.Contains("pseudo") ||
+                        desc.Contains("mihomo") || desc.Contains("clash") || desc.Contains("tun") || desc.Contains("tap") || desc.Contains("wsl") ||
+                        name.Contains("mihomo") || name.Contains("clash") || name.Contains("zerotier") || name.Contains("vethernet"))
+                        continue;
+
+                    var stats = ni.GetIPStatistics();
+                    totalRx += stats.BytesReceived;
+                    totalTx += stats.BytesSent;
+                }
+
+                DateTime now = DateTime.UtcNow;
+                double seconds = (now - _prevNetTime).TotalSeconds;
+                if (seconds <= 0) seconds = 1.0;
+
+                long deltaRecv = totalRx - _prevRxBytes;
+                long deltaSent = totalTx - _prevTxBytes;
+
+                if (_prevRxBytes > 0 && deltaRecv > 0) _sessionRecvBytes += deltaRecv;
+                if (_prevTxBytes > 0 && deltaSent > 0) _sessionSentBytes += deltaSent;
+
+                double downRate = (_prevRxBytes > 0 && deltaRecv >= 0) ? (deltaRecv / seconds) : 0;
+                double upRate = (_prevTxBytes > 0 && deltaSent >= 0) ? (deltaSent / seconds) : 0;
+
+                _prevRxBytes = totalRx;
+                _prevTxBytes = totalTx;
+                _prevNetTime = now;
+
+                net.DownBytesPerSec = downRate;
+                net.UpBytesPerSec = upRate;
+                net.DownSpeedStr = "↓ " + FormatCompactSpeed(downRate);
+                net.UpSpeedStr = "↑ " + FormatCompactSpeed(upRate);
+                net.SessionRecvMb = Math.Round(_sessionRecvBytes / 1024.0 / 1024.0, 1);
+                net.SessionSentMb = Math.Round(_sessionSentBytes / 1024.0 / 1024.0, 1);
+
+                // Find active primary IP & adapter name & link speed
+                bool foundActive = false;
+                string ifaceName = "";
+                string localIp = "127.0.0.1";
+                string linkSpeed = "--";
+                foreach (var ni in ifaces)
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    string desc = ni.Description.ToLower();
+                    string name = ni.Name.ToLower();
+                    if (desc.Contains("zerotier") || desc.Contains("virtual") || desc.Contains("vpn") ||
+                        desc.Contains("mihomo") || desc.Contains("clash") || desc.Contains("tun") || desc.Contains("tap") || desc.Contains("wsl") ||
+                        name.Contains("mihomo") || name.Contains("clash") || name.Contains("zerotier") || name.Contains("vethernet"))
+                        continue;
+
+                    foreach (var u in ni.GetIPProperties().UnicastAddresses)
+                    {
+                        if (u.Address.AddressFamily == AddressFamily.InterNetwork && !System.Net.IPAddress.IsLoopback(u.Address))
+                        {
+                            ifaceName = ni.Name;
+                            foundActive = true;
+                            localIp = u.Address.ToString();
+                            if (ni.Speed > 0)
+                            {
+                                if (ni.Speed >= 1000000000)
+                                    linkSpeed = string.Format("{0:0.#} Gbps", ni.Speed / 1000000000.0);
+                                else
+                                    linkSpeed = string.Format("{0} Mbps", ni.Speed / 1000000);
+                            }
+                            break;
+                        }
+                    }
+                    if (foundActive) break;
+                }
+
+                net.ActiveInterface = foundActive ? ifaceName : (LinuxSettings.Language == AppLanguage.Zh ? "无网络" : "No Network");
+                net.LocalIp = localIp;
+                net.LinkSpeedStr = linkSpeed;
 
                 // GeoIP
                 net.PublicIp = !string.IsNullOrEmpty(_cachedPublicIp) ? _cachedPublicIp : I18n.Current.NetFetching;
@@ -781,6 +1079,7 @@ namespace SysMonitor.Linux
                 {
                     var zt = new LinuxZeroTierData();
                     string secret = GetZeroTierSecret();
+                    int ztPort = GetZeroTierPort();
 
                     if (!string.IsNullOrEmpty(secret))
                     {
@@ -790,7 +1089,7 @@ namespace SysMonitor.Linux
                             client.DefaultRequestHeaders.Add("X-ZT1-Auth", secret);
 
                             // Status
-                            var respStatus = await client.GetStringAsync("http://127.0.0.1:9993/status");
+                            var respStatus = await client.GetStringAsync($"http://127.0.0.1:{ztPort}/status");
                             using (var doc = JsonDocument.Parse(respStatus))
                             {
                                 zt.IsRunning = true;
@@ -799,7 +1098,7 @@ namespace SysMonitor.Linux
                             }
 
                             // Peers (Moons)
-                            var respPeers = await client.GetStringAsync("http://127.0.0.1:9993/peer");
+                            var respPeers = await client.GetStringAsync($"http://127.0.0.1:{ztPort}/peer");
                             using (var doc = JsonDocument.Parse(respPeers))
                             {
                                 if (doc.RootElement.ValueKind == JsonValueKind.Array)
@@ -892,12 +1191,47 @@ namespace SysMonitor.Linux
             });
         }
 
+        private int GetZeroTierPort()
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            string[] portFiles = new[]
+            {
+                "/var/lib/zerotier-one/zerotier-one.port",
+                @"C:\ProgramData\ZeroTier\One\zerotier-one.port",
+                Path.Combine(commonAppData, "ZeroTier", "One", "zerotier-one.port"),
+                Path.Combine(localAppData, "ZeroTier", "zerotier-one.port"),
+                Path.Combine(localAppData, "ZeroTier", "One", "zerotier-one.port")
+            };
+            foreach (var pf in portFiles)
+            {
+                if (File.Exists(pf))
+                {
+                    try
+                    {
+                        string txt = File.ReadAllText(pf).Trim();
+                        if (int.TryParse(txt, out int port) && port > 0) return port;
+                    }
+                    catch { }
+                }
+            }
+            return 9993;
+        }
+
         private string GetZeroTierSecret()
         {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+
             string[] paths = new[]
             {
                 "/var/lib/zerotier-one/authtoken.secret",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".zeroTierOneAuthToken")
+                Path.Combine(userProfile, ".zeroTierOneAuthToken"),
+                @"C:\ProgramData\ZeroTier\One\authtoken.secret",
+                Path.Combine(commonAppData, "ZeroTier", "One", "authtoken.secret"),
+                Path.Combine(localAppData, "ZeroTier", "authtoken.secret"),
+                Path.Combine(localAppData, "ZeroTier", "One", "authtoken.secret")
             };
             foreach (var p in paths)
             {

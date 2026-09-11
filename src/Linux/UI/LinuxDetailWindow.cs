@@ -207,9 +207,11 @@ namespace SysMonitor.Linux.UI
                 BorderThickness = new Thickness(0.6),
                 VerticalAlignment = VerticalAlignment.Center
             };
+            string osName = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) ? "WINDOWS" :
+                            (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX) ? "MACOS" : "LINUX");
             var tbSys = new TextBlock
             {
-                Text = Environment.Is64BitOperatingSystem ? "LINUX 64-BIT" : "LINUX 32-BIT",
+                Text = string.Format("{0} {1}-BIT", osName, Environment.Is64BitOperatingSystem ? "64" : "32"),
                 FontSize = 9,
                 FontWeight = FontWeight.SemiBold,
                 Foreground = theme.TextSecondary

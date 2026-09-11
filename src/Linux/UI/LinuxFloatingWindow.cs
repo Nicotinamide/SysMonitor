@@ -99,29 +99,33 @@ namespace SysMonitor.Linux.UI
 
             Opened += (s, e) =>
             {
-                var screen = Screens.Primary ?? Screens.All.FirstOrDefault();
-                if (screen != null)
+                try
                 {
-                    Position = new PixelPoint(screen.WorkingArea.X + screen.WorkingArea.Width - (int)WidgetWidth - 24, screen.WorkingArea.Y + 60);
+                    var screen = Screens.Primary ?? Screens.All.FirstOrDefault();
+                    if (screen != null)
+                    {
+                        Position = new PixelPoint(screen.WorkingArea.X + screen.WorkingArea.Width - (int)WidgetWidth - 24, screen.WorkingArea.Y + 60);
+                    }
+
+                    _detailWindow = new LinuxDetailWindow(this);
+
+                    _engine = new LinuxTelemetryEngine();
+                    _engine.SystemLoadUpdated += (load) => Dispatcher.UIThread.Post(() => OnSystemLoadUpdated(load));
+                    _engine.PowerUpdated += (pwr) => Dispatcher.UIThread.Post(() => OnPowerUpdated(pwr));
+                    _engine.NetworkUpdated += (net) => Dispatcher.UIThread.Post(() => OnNetworkUpdated(net));
+                    _engine.ZeroTierUpdated += (zt) => Dispatcher.UIThread.Post(() => OnZeroTierUpdated(zt));
+                    _engine.MoonDirectAlert += (addr, lat) => Dispatcher.UIThread.Post(() =>
+                    {
+                        var i18n = I18n.Current;
+                        ShowNotification(i18n.NotifyMoonDirectTitle, string.Format(i18n.NotifyMoonDirectFormat, addr, lat), ToastType.Success, "⚡");
+                    });
+                    _engine.MoonRelayAlert += (addr) => Dispatcher.UIThread.Post(() =>
+                    {
+                        var i18n = I18n.Current;
+                        ShowNotification(i18n.NotifyMoonRelayTitle, string.Format(i18n.NotifyMoonRelayFormat, addr), ToastType.Warning, "🔄");
+                    });
                 }
-
-                _detailWindow = new LinuxDetailWindow(this);
-
-                _engine = new LinuxTelemetryEngine();
-                _engine.SystemLoadUpdated += (load) => Dispatcher.UIThread.Post(() => OnSystemLoadUpdated(load));
-                _engine.PowerUpdated += (pwr) => Dispatcher.UIThread.Post(() => OnPowerUpdated(pwr));
-                _engine.NetworkUpdated += (net) => Dispatcher.UIThread.Post(() => OnNetworkUpdated(net));
-                _engine.ZeroTierUpdated += (zt) => Dispatcher.UIThread.Post(() => OnZeroTierUpdated(zt));
-                _engine.MoonDirectAlert += (addr, lat) => Dispatcher.UIThread.Post(() =>
-                {
-                    var i18n = I18n.Current;
-                    ShowNotification(i18n.NotifyMoonDirectTitle, string.Format(i18n.NotifyMoonDirectFormat, addr, lat), ToastType.Success, "⚡");
-                });
-                _engine.MoonRelayAlert += (addr) => Dispatcher.UIThread.Post(() =>
-                {
-                    var i18n = I18n.Current;
-                    ShowNotification(i18n.NotifyMoonRelayTitle, string.Format(i18n.NotifyMoonRelayFormat, addr), ToastType.Warning, "🔄");
-                });
+                catch { }
             };
         }
 

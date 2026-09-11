@@ -98,19 +98,31 @@ jobs:
           path: sysmonitor-linux-arm64.tar.gz
 
   # ==========================================
-  # 3. Windows x64 构建 (.NET Framework 原生单文件)
+  # 3. Windows x64 构建 (Unified Avalonia Desktop UI)
   # ==========================================
   build-windows-x64:
-    name: Build Windows x64 (Native)
+    name: Build Windows x64 (Avalonia Single-File)
     runs-on: windows-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Compile Native C# WPF SysMonitor.exe
-        shell: cmd
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Windows x64 Single-File
+        shell: pwsh
         run: |
-          call "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /codepage:65001 /target:winexe /optimize+ /win32icon:app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Xaml.dll /r:System.Web.Extensions.dll /r:System.Security.dll /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" /out:SysMonitor.exe src\*.cs
+          dotnet publish SysMonitor.csproj `
+            -r win-x64 `
+            -c Release `
+            -p:PublishAot=false `
+            -p:PublishSingleFile=true `
+            --self-contained true `
+            -o ./dist/win-x64
+          Copy-Item ./dist/win-x64/sysmonitor.exe ./SysMonitor.exe
 
       - name: Compress Windows Release Bundle
         shell: pwsh

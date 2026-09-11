@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -33,8 +33,15 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
-  <!-- Linux 平台：编译 Linux 原生引擎及 Avalonia UI，完全隔离 Windows WPF 专有代码 -->
-  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+  <!-- Windows x64 发布配置: 独立单文件发布 -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <PublishAot>false</PublishAot>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <!-- 跨平台统一编译：Avalonia 桌面 UI + 统一引擎 -->
+  <ItemGroup>
     <Compile Include="src/Linux/**/*.cs" />
     <Compile Include="src/UpdateChecker.cs" />
     <Compile Include="src/I18n.cs" />
@@ -42,11 +49,6 @@
     <PackageReference Include="Avalonia.Desktop" Version="11.0.10" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.10" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.0.10" />
-  </ItemGroup>
-
-  <!-- Windows 平台：编译 Windows 源码 -->
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
-    <Compile Include="src/*.cs" />
   </ItemGroup>
 
   <!-- 包含多分辨率图标和桌面配置 -->

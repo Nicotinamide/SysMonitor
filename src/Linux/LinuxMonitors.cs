@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -11,12 +13,72 @@ namespace SysMonitor.Linux
 {
     /// <summary>
     /// Linux 原生硬件与网络遥测采集引擎
-    /// 直接读取 Linux 内核 /proc 与 /sys 虚拟文件系统，纳秒级读取，零命令调用开销
+    /// 直接读取 Linux 内核 /proc 与 /sys 虚拟文件系统，纳秒级读取，零命令调用开销；同时跨平台支持 Windows 原生遥测
     /// </summary>
     public static class LinuxMonitors
     {
+        #region Windows Native Interop
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SYSTEM_BATTERY_STATE
+        {
+            [MarshalAs(UnmanagedType.I1)] public bool AcOnLine;
+            [MarshalAs(UnmanagedType.I1)] public bool BatteryPresent;
+            [MarshalAs(UnmanagedType.I1)] public bool Charging;
+            [MarshalAs(UnmanagedType.I1)] public bool Discharging;
+            public byte Spare1, Spare2, Spare3, Spare4;
+            public uint MaxCapacity;
+            public uint RemainingCapacity;
+            public int Rate;
+            public uint EstimatedTime;
+            public uint DefaultAlert1;
+            public uint DefaultAlert2;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SYSTEM_POWER_STATUS
+        {
+            public byte ACLineStatus;
+            public byte BatteryFlag;
+            public byte BatteryLifePercent;
+            public byte SystemStatusFlag;
+            public int BatteryLifeTime;
+            public int BatteryFullLifeTime;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        public class MEMORYSTATUSEX
+        {
+            public uint dwLength;
+            public uint dwMemoryLoad;
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+            public MEMORYSTATUSEX() { dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX)); }
+        }
+
+        [DllImport("powrprof.dll")]
+        public static extern uint CallNtPowerInformation(int InformationLevel, IntPtr lpInputBuffer, uint nInputBufferSize, out SYSTEM_BATTERY_STATE lpOutputBuffer, uint nOutputBufferSize);
+
+        [DllImport("kernel32.dll")]
+        public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS sps);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX lpBuffer);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetSystemTimes(out long lpIdleTime, out long lpKernelTime, out long lpUserTime);
+
+        private static long _prevWinCpuIdle = 0;
+        private static long _prevWinCpuKernel = 0;
+        private static long _prevWinCpuUser = 0;
+        #endregion
+
         // ==========================================
-        // 1. 电池供电监测 (/sys/class/power_supply)
+        // 1. 电池供电监测 (/sys/class/power_supply & Win32)
         // ==========================================
         public static BatterySnapshot GetBatteryStatus()
         {
@@ -27,6 +89,34 @@ namespace SysMonitor.Linux
                 IsPluggedIn = true,
                 RateWatts = 0
             };
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                try
+                {
+                    GetSystemPowerStatus(out SYSTEM_POWER_STATUS sps);
+                    SYSTEM_BATTERY_STATE sbs = default;
+                    try { CallNtPowerInformation(5, IntPtr.Zero, 0, out sbs, (uint)Marshal.SizeOf(typeof(SYSTEM_BATTERY_STATE))); } catch { }
+
+                    bool hasBattery = sbs.BatteryPresent && (sps.BatteryFlag != 128) && (sps.BatteryLifePercent != 255);
+                    if (!hasBattery)
+                    {
+                        snapshot.Percent = 100;
+                        snapshot.IsCharging = false;
+                        snapshot.IsPluggedIn = true;
+                        snapshot.RateWatts = 0;
+                    }
+                    else
+                    {
+                        snapshot.Percent = sps.BatteryLifePercent <= 100 ? sps.BatteryLifePercent : 100;
+                        snapshot.IsPluggedIn = (sps.ACLineStatus == 1 || sbs.AcOnLine);
+                        snapshot.IsCharging = sbs.Charging || ((sps.BatteryFlag & 8) != 0) || sbs.Rate > 0;
+                        snapshot.RateWatts = Math.Round(Math.Abs(sbs.Rate) / 1000.0, 1);
+                    }
+                }
+                catch { }
+                return snapshot;
+            }
 
             try
             {
@@ -102,6 +192,29 @@ namespace SysMonitor.Linux
 
         public static double GetCpuUsage()
         {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                try
+                {
+                    GetSystemTimes(out long currIdle, out long currKernel, out long currUser);
+                    long sysDiff = (currKernel - _prevWinCpuKernel) + (currUser - _prevWinCpuUser);
+                    long idleDiff = currIdle - _prevWinCpuIdle;
+                    long busy = sysDiff - idleDiff;
+
+                    double usage = 0.0;
+                    if (sysDiff > 0 && _prevWinCpuKernel > 0)
+                    {
+                        usage = Math.Max(0.0, Math.Min(100.0, Math.Round((busy * 100.0) / sysDiff, 1)));
+                    }
+
+                    _prevWinCpuIdle = currIdle;
+                    _prevWinCpuKernel = currKernel;
+                    _prevWinCpuUser = currUser;
+                    return usage;
+                }
+                catch { return 0.0; }
+            }
+
             try
             {
                 if (!File.Exists("/proc/stat")) return 0.0;
@@ -142,11 +255,26 @@ namespace SysMonitor.Linux
         }
 
         // ==========================================
-        // 3. 内存与交换空间采样 (/proc/meminfo)
+        // 3. 内存与交换空间采样 (/proc/meminfo & Win32)
         // ==========================================
         public static MemorySnapshot GetMemoryStatus()
         {
             var snapshot = new MemorySnapshot();
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                try
+                {
+                    var mem = new MEMORYSTATUSEX();
+                    GlobalMemoryStatusEx(mem);
+                    snapshot.TotalMB = (int)(mem.ullTotalPhys / (1024 * 1024));
+                    snapshot.UsedMB = (int)((mem.ullTotalPhys - mem.ullAvailPhys) / (1024 * 1024));
+                    snapshot.UsagePercent = (int)mem.dwMemoryLoad;
+                }
+                catch { }
+                return snapshot;
+            }
+
             try
             {
                 if (!File.Exists("/proc/meminfo")) return snapshot;
@@ -191,7 +319,7 @@ namespace SysMonitor.Linux
         }
 
         // ==========================================
-        // 4. 网络实时吞吐流量 (/proc/net/dev)
+        // 4. 网络实时吞吐流量 (/proc/net/dev & Win32)
         // ==========================================
         private static long _prevRxBytes = 0;
         private static long _prevTxBytes = 0;
@@ -200,6 +328,42 @@ namespace SysMonitor.Linux
         public static NetworkRateSnapshot GetNetworkRates()
         {
             var snapshot = new NetworkRateSnapshot();
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                try
+                {
+                    long totalRx = 0, totalTx = 0;
+                    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                    {
+                        if (ni.OperationalStatus != OperationalStatus.Up || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                        string desc = ni.Description.ToLower();
+                        string name = ni.Name.ToLower();
+                        if (desc.Contains("zerotier") || desc.Contains("virtual") || desc.Contains("vpn") || desc.Contains("pseudo") ||
+                            desc.Contains("mihomo") || desc.Contains("clash") || desc.Contains("tun") || desc.Contains("tap") || desc.Contains("wsl") ||
+                            name.Contains("mihomo") || name.Contains("clash") || name.Contains("zerotier") || name.Contains("vethernet"))
+                            continue;
+                        var s = ni.GetIPStatistics();
+                        totalRx += s.BytesReceived;
+                        totalTx += s.BytesSent;
+                    }
+
+                    DateTime now = DateTime.UtcNow;
+                    double seconds = (now - _prevNetTime).TotalSeconds;
+                    if (seconds > 0 && _prevRxBytes > 0)
+                    {
+                        snapshot.DownloadKBps = Math.Max(0, (totalRx - _prevRxBytes) / 1024.0 / seconds);
+                        snapshot.UploadKBps = Math.Max(0, (totalTx - _prevTxBytes) / 1024.0 / seconds);
+                    }
+
+                    _prevRxBytes = totalRx;
+                    _prevTxBytes = totalTx;
+                    _prevNetTime = now;
+                }
+                catch { }
+                return snapshot;
+            }
+
             try
             {
                 if (!File.Exists("/proc/net/dev")) return snapshot;
@@ -267,8 +431,10 @@ namespace SysMonitor.Linux
                     client.Timeout = TimeSpan.FromMilliseconds(1500);
                     client.DefaultRequestHeaders.Add("X-ZT1-Auth", secret);
 
+                    int port = GetZeroTierPort();
+
                     // 1. 状态请求
-                    var statusResp = await client.GetStringAsync("http://127.0.0.1:9993/status");
+                    var statusResp = await client.GetStringAsync($"http://127.0.0.1:{port}/status");
                     if (!string.IsNullOrEmpty(statusResp))
                     {
                         snapshot.IsRunning = true;
@@ -278,7 +444,7 @@ namespace SysMonitor.Linux
                     }
 
                     // 2. Peers 拓扑
-                    var peerResp = await client.GetStringAsync("http://127.0.0.1:9993/peer");
+                    var peerResp = await client.GetStringAsync($"http://127.0.0.1:{port}/peer");
                     if (!string.IsNullOrEmpty(peerResp))
                     {
                         var peerMatches = Regex.Matches(peerResp, "\"address\"\\s*:\\s*\"([^\"]+)\"");
@@ -309,12 +475,47 @@ namespace SysMonitor.Linux
             return snapshot;
         }
 
+        private static int GetZeroTierPort()
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            string[] portFiles = new[]
+            {
+                "/var/lib/zerotier-one/zerotier-one.port",
+                @"C:\ProgramData\ZeroTier\One\zerotier-one.port",
+                Path.Combine(commonAppData, "ZeroTier", "One", "zerotier-one.port"),
+                Path.Combine(localAppData, "ZeroTier", "zerotier-one.port"),
+                Path.Combine(localAppData, "ZeroTier", "One", "zerotier-one.port")
+            };
+            foreach (var pf in portFiles)
+            {
+                if (File.Exists(pf))
+                {
+                    try
+                    {
+                        string txt = File.ReadAllText(pf).Trim();
+                        if (int.TryParse(txt, out int port) && port > 0) return port;
+                    }
+                    catch { }
+                }
+            }
+            return 9993;
+        }
+
         private static string GetAuthSecret()
         {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+
             string[] searchPaths = new[]
             {
                 "/var/lib/zerotier-one/authtoken.secret",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".zeroTierOneAuthToken")
+                Path.Combine(userProfile, ".zeroTierOneAuthToken"),
+                @"C:\ProgramData\ZeroTier\One\authtoken.secret",
+                Path.Combine(commonAppData, "ZeroTier", "One", "authtoken.secret"),
+                Path.Combine(localAppData, "ZeroTier", "authtoken.secret"),
+                Path.Combine(localAppData, "ZeroTier", "One", "authtoken.secret")
             };
 
             foreach (string p in searchPaths)
