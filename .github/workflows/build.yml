@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   # ==========================================
-  # 1. Linux x86_64 原生 AOT 构建
+  # 1. Linux x86_64 原生构建 (Native AOT / SingleFile)
   # ==========================================
   build-linux-x64:
     name: Build Linux x86_64 (Native AOT)
@@ -25,20 +25,27 @@ jobs:
       - name: Install Native Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang zlib1g-dev libkrb5-dev
+          sudo apt-get install -y build-essential clang zlib1g-dev libkrb5-dev
 
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish Native AOT (linux-x64)
+      - name: Publish Linux x64 Binary
         run: |
           dotnet publish SysMonitor.csproj \
             -r linux-x64 \
             -c Release \
             -p:PublishAot=true \
+            -p:StripSymbols=true \
+            -o ./dist/linux-x64 || \
+          dotnet publish SysMonitor.csproj \
+            -r linux-x64 \
+            -c Release \
+            -p:PublishAot=false \
             -p:PublishSingleFile=true \
+            --self-contained true \
             -p:StripSymbols=true \
             -o ./dist/linux-x64
 

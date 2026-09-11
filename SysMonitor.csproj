@@ -12,9 +12,6 @@
     <!-- 彻底关闭 SDK 默认的通配源码包含，按平台严格精准包含，根治跨平台源码交叉污染 -->
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
 
-    <!-- Native AOT 发布配置 -->
-    <PublishAot Condition="'$(PublishAot)' == ''">true</PublishAot>
-    <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <StripSymbols>true</StripSymbols>
     <OptimizationPreference>Speed</OptimizationPreference>
@@ -22,9 +19,15 @@
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
   </PropertyGroup>
 
-  <!-- 针对 ARM64 跨架构编译时关闭 Native AOT，采用纯原生 SingleFile -->
+  <!-- Linux x64 默认使用 Native AOT -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
+    <PublishAot Condition="'$(PublishAot)' == ''">true</PublishAot>
+  </PropertyGroup>
+
+  <!-- Linux ARM64 跨架构编译使用 SingleFile 自包含 -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">
     <PublishAot>false</PublishAot>
+    <PublishSingleFile>true</PublishSingleFile>
   </PropertyGroup>
 
   <!-- Linux 平台：仅编译 Linux 原生引擎，完全隔离 Windows WPF 专有代码 -->
