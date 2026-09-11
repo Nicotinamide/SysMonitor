@@ -46,6 +46,7 @@ namespace SysMonitor.Linux.UI
         {
             _onClick = onClick;
             Title = "SysMonitorToast";
+            RequestedThemeVariant = LinuxSettings.IsDark ? Avalonia.Styling.ThemeVariant.Dark : Avalonia.Styling.ThemeVariant.Light;
             SystemDecorations = SystemDecorations.None;
             Background = Brushes.Transparent;
             TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };

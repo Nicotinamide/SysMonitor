@@ -599,19 +599,135 @@ namespace SysMonitor.Linux
             return "127.0.0.1";
         }
 
+        private string _cachedLinkSpeed = "--";
+        private DateTime _lastSpeedCheck = DateTime.MinValue;
+        private string _lastSpeedIface = "";
+
         private string GetInterfaceSpeed(string ifaceName)
         {
+            if (string.IsNullOrEmpty(ifaceName) || ifaceName.Contains("无网络") || ifaceName.Contains("No Network"))
+                return "--";
+
+            // Cache for 4 seconds to avoid calling subprocesses on every 1-second telemetry tick
+            if (ifaceName == _lastSpeedIface && (DateTime.UtcNow - _lastSpeedCheck).TotalSeconds < 4 && _cachedLinkSpeed != "--")
+            {
+                return _cachedLinkSpeed;
+            }
+
+            _lastSpeedIface = ifaceName;
+            _lastSpeedCheck = DateTime.UtcNow;
+
+            // 1. Try standard /sys/class/net/<iface>/speed (fastest, works on all Ethernet interfaces)
             try
             {
                 string speedFile = Path.Combine("/sys/class/net", ifaceName, "speed");
-                if (File.Exists(speedFile) && int.TryParse(File.ReadAllText(speedFile).Trim(), out int speed) && speed > 0)
+                if (File.Exists(speedFile))
                 {
-                    if (speed >= 1000) return string.Format("{0:0.#} Gbps", speed / 1000.0);
-                    return string.Format("{0} Mbps", speed);
+                    string content = File.ReadAllText(speedFile).Trim();
+                    if (int.TryParse(content, out int speed) && speed > 0)
+                    {
+                        if (speed >= 1000)
+                            _cachedLinkSpeed = string.Format("{0:0.#} Gbps", speed / 1000.0);
+                        else
+                            _cachedLinkSpeed = string.Format("{0} Mbps", speed);
+                        return _cachedLinkSpeed;
+                    }
                 }
             }
             catch { }
-            return "--";
+
+            // 2. Wireless interface fallback: iw dev <iface> link
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "iw",
+                    Arguments = $"dev {ifaceName} link",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (var p = Process.Start(psi))
+                {
+                    if (p != null)
+                    {
+                        string outStr = p.StandardOutput.ReadToEnd();
+                        p.WaitForExit(400);
+                        var m = Regex.Match(outStr, @"tx bitrate:\s*([0-9.]+)\s*([A-Za-z/]+)", RegexOptions.IgnoreCase);
+                        if (m.Success)
+                        {
+                            double val = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                            _cachedLinkSpeed = val >= 1000 ? string.Format("{0:0.#} Gbps", val / 1000.0) : string.Format("{0:0.#} Mbps", val);
+                            return _cachedLinkSpeed;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 3. Fallback: iwconfig <iface>
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "iwconfig",
+                    Arguments = ifaceName,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (var p = Process.Start(psi))
+                {
+                    if (p != null)
+                    {
+                        string outStr = p.StandardOutput.ReadToEnd();
+                        p.WaitForExit(400);
+                        var m = Regex.Match(outStr, @"Bit Rate[=:]\s*([0-9.]+)\s*([A-Za-z/]+)", RegexOptions.IgnoreCase);
+                        if (m.Success)
+                        {
+                            double val = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                            _cachedLinkSpeed = val >= 1000 ? string.Format("{0:0.#} Gbps", val / 1000.0) : string.Format("{0:0.#} Mbps", val);
+                            return _cachedLinkSpeed;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 4. Fallback: nmcli -t -f GENERAL.SPEED dev show <iface>
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "nmcli",
+                    Arguments = $"-t -f GENERAL.SPEED dev show {ifaceName}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (var p = Process.Start(psi))
+                {
+                    if (p != null)
+                    {
+                        string outStr = p.StandardOutput.ReadToEnd().Trim();
+                        p.WaitForExit(400);
+                        var m = Regex.Match(outStr, @"([0-9.]+)\s*([A-Za-z/]+)", RegexOptions.IgnoreCase);
+                        if (m.Success)
+                        {
+                            double val = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                            _cachedLinkSpeed = val >= 1000 ? string.Format("{0:0.#} Gbps", val / 1000.0) : string.Format("{0:0.#} Mbps", val);
+                            return _cachedLinkSpeed;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            _cachedLinkSpeed = "--";
+            return _cachedLinkSpeed;
         }
 
         private async Task FetchGeoIpAsync()
@@ -891,10 +1007,55 @@ namespace SysMonitor.Linux
             }
         }
 
+        private string _cachePath;
+
         public LinuxMemberDirectoryEngine()
         {
+            try
+            {
+                string configDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "sysmonitor");
+                if (!Directory.Exists(configDir)) Directory.CreateDirectory(configDir);
+                _cachePath = Path.Combine(configDir, "members_cache.json");
+            }
+            catch { }
+
             LoadConfig();
-            _timer = new Timer(state => TriggerRefresh(), null, 2000, 30000);
+            LoadOfflineCache();
+            _timer = new Timer(state => TriggerRefresh(), null, 1500, 300000);
+        }
+
+        private void LoadOfflineCache()
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(_cachePath) && File.Exists(_cachePath))
+                {
+                    string json = File.ReadAllText(_cachePath);
+                    var list = ParseMembersJson(json);
+                    if (list != null && list.Count > 0)
+                    {
+                        lock (_lock)
+                        {
+                            _members = list;
+                        }
+                        UpdateStatus(string.Format("已缓存 {0} 节点", list.Count));
+                        MembersUpdated?.Invoke(list);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void SaveOfflineCache(string json)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(_cachePath) && !string.IsNullOrEmpty(json))
+                {
+                    File.WriteAllText(_cachePath, json);
+                }
+            }
+            catch { }
         }
 
         public string GetCurrentStatusText() => _lastStatusText;
@@ -969,6 +1130,7 @@ namespace SysMonitor.Linux
                         {
                             _members = result.members;
                         }
+                        SaveOfflineCache(result.rawJson);
                         UpdateStatus(string.Format("已同步 {0} 节点", result.members.Count));
                         MembersUpdated?.Invoke(result.members);
                     }
@@ -994,7 +1156,7 @@ namespace SysMonitor.Linux
             callback?.Invoke(result.success, result.members?.Count ?? 0, result.error);
         }
 
-        private async Task<(bool success, List<LinuxMemberNode> members, string error)> QueryMembersApiAsync(string url, string nwid, string token)
+        private async Task<(bool success, List<LinuxMemberNode> members, string rawJson, string error)> QueryMembersApiAsync(string url, string nwid, string token)
         {
             try
             {
@@ -1019,19 +1181,19 @@ namespace SysMonitor.Linux
                     if (!resp.IsSuccessStatusCode)
                     {
                         int code = (int)resp.StatusCode;
-                        if (code == 401) return (false, null, "401未授权 (Token 错误)");
-                        if (code == 403) return (false, null, "403拒绝访问 (无权限)");
-                        return (false, null, $"HTTP {code} {resp.ReasonPhrase}");
+                        if (code == 401) return (false, null, null, "401未授权 (Token 错误)");
+                        if (code == 403) return (false, null, null, "403拒绝访问 (无权限)");
+                        return (false, null, null, $"HTTP {code} {resp.ReasonPhrase}");
                     }
 
                     string body = await resp.Content.ReadAsStringAsync();
                     var list = ParseMembersJson(body);
-                    return (true, list, null);
+                    return (true, list, body, null);
                 }
             }
             catch (Exception ex)
             {
-                return (false, null, ex.Message);
+                return (false, null, null, ex.Message);
             }
         }
 
@@ -1055,15 +1217,35 @@ namespace SysMonitor.Linux
                     }
                     else if (root.ValueKind == JsonValueKind.Object)
                     {
-                        foreach (var prop in root.EnumerateObject())
+                        // Check if members array is wrapped inside an object (e.g. {"members": [...]} or {"data": [...]})
+                        if (root.TryGetProperty("members", out var memArray) && memArray.ValueKind == JsonValueKind.Array)
                         {
-                            if (prop.Value.ValueKind == JsonValueKind.Object)
+                            foreach (var el in memArray.EnumerateArray())
                             {
-                                var node = ParseSingleMember(prop.Value);
-                                if (node != null)
+                                var node = ParseSingleMember(el);
+                                if (node != null) list.Add(node);
+                            }
+                        }
+                        else if (root.TryGetProperty("data", out var dataArray) && dataArray.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var el in dataArray.EnumerateArray())
+                            {
+                                var node = ParseSingleMember(el);
+                                if (node != null) list.Add(node);
+                            }
+                        }
+                        else
+                        {
+                            foreach (var prop in root.EnumerateObject())
+                            {
+                                if (prop.Value.ValueKind == JsonValueKind.Object)
                                 {
-                                    if (string.IsNullOrEmpty(node.Id)) node.Id = prop.Name;
-                                    list.Add(node);
+                                    var node = ParseSingleMember(prop.Value);
+                                    if (node != null)
+                                    {
+                                        if (string.IsNullOrEmpty(node.Id)) node.Id = prop.Name;
+                                        list.Add(node);
+                                    }
                                 }
                             }
                         }
@@ -1080,15 +1262,23 @@ namespace SysMonitor.Linux
             var node = new LinuxMemberNode();
 
             // ID
-            if (el.TryGetProperty("id", out var id)) node.Id = id.GetString() ?? "";
-            else if (el.TryGetProperty("nodeId", out var nid)) node.Id = nid.GetString() ?? "";
+            if (el.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String) node.Id = id.GetString() ?? "";
+            else if (el.TryGetProperty("address", out var addr) && addr.ValueKind == JsonValueKind.String) node.Id = addr.GetString() ?? "";
+            else if (el.TryGetProperty("nodeId", out var nid) && nid.ValueKind == JsonValueKind.String) node.Id = nid.GetString() ?? "";
 
             // Name
-            if (el.TryGetProperty("name", out var n)) node.Name = n.GetString() ?? "";
-            else if (el.TryGetProperty("description", out var desc)) node.Name = desc.GetString() ?? "";
+            if (el.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String) node.Name = n.GetString() ?? "";
+            else if (el.TryGetProperty("description", out var desc) && desc.ValueKind == JsonValueKind.String) node.Name = desc.GetString() ?? "";
+            if (string.IsNullOrEmpty(node.Name)) node.Name = !string.IsNullOrEmpty(node.Id) ? node.Id : "未命名节点";
+
+            // Authorized
+            if (el.TryGetProperty("authorized", out var auth) && (auth.ValueKind == JsonValueKind.True || auth.ValueKind == JsonValueKind.False))
+            {
+                node.Authorized = auth.GetBoolean();
+            }
 
             // IP Assignments
-            if (el.TryGetProperty("config", out var cfg) && cfg.TryGetProperty("ipAssignments", out var ips))
+            if (el.TryGetProperty("config", out var cfg) && cfg.ValueKind == JsonValueKind.Object && cfg.TryGetProperty("ipAssignments", out var ips))
             {
                 ExtractIps(ips, node);
             }
@@ -1098,15 +1288,21 @@ namespace SysMonitor.Linux
             }
 
             // Latency & Peer
-            if (el.TryGetProperty("peer", out var peer))
+            if (el.TryGetProperty("peer", out var peer) && peer.ValueKind == JsonValueKind.Object)
             {
-                if (peer.TryGetProperty("latency", out var lat)) node.Latency = lat.GetInt32();
-                if (peer.TryGetProperty("role", out var r)) node.Role = r.GetString() ?? "LEAF";
+                if (peer.TryGetProperty("latency", out var lat) && lat.ValueKind == JsonValueKind.Number)
+                {
+                    node.Latency = lat.GetInt32();
+                }
+                if (peer.TryGetProperty("role", out var r) && r.ValueKind == JsonValueKind.String)
+                {
+                    node.Role = r.GetString() ?? "LEAF";
+                }
                 if (peer.TryGetProperty("paths", out var paths) && paths.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var path in paths.EnumerateArray())
                     {
-                        if (path.TryGetProperty("address", out var paddr))
+                        if (path.ValueKind == JsonValueKind.Object && path.TryGetProperty("address", out var paddr) && paddr.ValueKind == JsonValueKind.String)
                         {
                             node.PhysicalAddress = paddr.GetString() ?? "";
                             break;

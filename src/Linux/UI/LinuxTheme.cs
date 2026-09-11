@@ -245,11 +245,17 @@ namespace SysMonitor.Linux.UI
 
         public static Button CreateIconButton(string icon, string tooltip, Action onClick, double fontSize = 11)
         {
-            var btn = new Button
+            var tb = new TextBlock
             {
-                Content = icon,
+                Text = icon,
                 FontSize = fontSize,
                 Foreground = Current.TextSecondary,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var btn = new Button
+            {
+                Content = tb,
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
@@ -261,6 +267,30 @@ namespace SysMonitor.Linux.UI
             return btn;
         }
 
+        public static Button CreateActionButton(string text, IBrush foreground, IBrush background, IBrush borderBrush, Action onClick, Thickness? padding = null, double fontSize = 10.5)
+        {
+            var tb = new TextBlock
+            {
+                Text = text,
+                FontSize = fontSize,
+                FontWeight = FontWeight.Medium,
+                Foreground = foreground,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var btn = new Button
+            {
+                Content = tb,
+                Background = background,
+                BorderBrush = borderBrush,
+                BorderThickness = new Thickness(0.8),
+                Padding = padding ?? new Thickness(8, 3),
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            if (onClick != null) btn.Click += (s, e) => onClick();
+            return btn;
+        }
+
         public static TextBox CreateInputTextBox(string text)
         {
             return new TextBox
@@ -268,6 +298,7 @@ namespace SysMonitor.Linux.UI
                 Text = text,
                 Background = Current.InputBg,
                 Foreground = Current.TextPrimary,
+                CaretBrush = Current.TextPrimary,
                 BorderBrush = Current.InputBorder,
                 BorderThickness = new Thickness(0.8),
                 CornerRadius = new CornerRadius(4),

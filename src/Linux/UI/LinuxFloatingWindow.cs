@@ -68,6 +68,7 @@ namespace SysMonitor.Linux.UI
         {
             Title = "SysMonitorWidget";
             Width = WidgetWidth;
+            RequestedThemeVariant = LinuxSettings.IsDark ? Avalonia.Styling.ThemeVariant.Dark : Avalonia.Styling.ThemeVariant.Light;
             SystemDecorations = SystemDecorations.None;
             Background = Brushes.Transparent;
             TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
@@ -89,6 +90,7 @@ namespace SysMonitor.Linux.UI
             {
                 Dispatcher.UIThread.Post(() =>
                 {
+                    RequestedThemeVariant = LinuxSettings.IsDark ? Avalonia.Styling.ThemeVariant.Dark : Avalonia.Styling.ThemeVariant.Light;
                     BuildUi();
                     SetupContextMenu();
                     ReplayTelemetry();

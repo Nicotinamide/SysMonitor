@@ -98,6 +98,7 @@ namespace SysMonitor.Linux.UI
             _parentFloat = parentFloat;
 
             Title = "SysMonitor Details";
+            RequestedThemeVariant = LinuxSettings.IsDark ? Avalonia.Styling.ThemeVariant.Dark : Avalonia.Styling.ThemeVariant.Light;
             SystemDecorations = SystemDecorations.None;
             Background = Brushes.Transparent;
             TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
@@ -144,6 +145,7 @@ namespace SysMonitor.Linux.UI
 
         public void RebuildUi()
         {
+            RequestedThemeVariant = LinuxSettings.IsDark ? Avalonia.Styling.ThemeVariant.Dark : Avalonia.Styling.ThemeVariant.Light;
             bool wasSettingsOpen = _overlaySettings != null && _overlaySettings.IsVisible;
             bool wasSearchOpen = _searchBoxBorder != null && _searchBoxBorder.IsVisible;
             string prevSearch = _tbMemberSearch?.Text ?? "";
@@ -531,7 +533,13 @@ namespace SysMonitor.Linux.UI
             Grid.SetColumn(lblMemberHead, 0);
             mHead.Children.Add(lblMemberHead);
 
-            var spHeadRight = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Spacing = 3 };
+            var spHeadRight = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Spacing = 4
+            };
 
             _tbMemberStatus = new TextBlock
             {
@@ -540,7 +548,8 @@ namespace SysMonitor.Linux.UI
                 FontWeight = FontWeight.Medium,
                 Foreground = theme.TextSecondary,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 4, 0)
+                Margin = new Thickness(0, 0, 6, 0),
+                IsVisible = false
             };
             spHeadRight.Children.Add(_tbMemberStatus);
 
@@ -579,6 +588,7 @@ namespace SysMonitor.Linux.UI
                 Watermark = i18n.SearchPlaceholder,
                 Background = Brushes.Transparent,
                 Foreground = theme.TextPrimary,
+                CaretBrush = theme.TextPrimary,
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Padding = new Thickness(0),
@@ -633,6 +643,19 @@ namespace SysMonitor.Linux.UI
                 Padding = new Thickness(6, 1.5, 6, 1.5),
                 Cursor = new Cursor(StandardCursorType.Hand),
                 Child = tbRef
+            };
+            pill.PointerEntered += (s, e) =>
+            {
+                if ((filterType == MemberFilterType.All && _currentMemberFilter != MemberFilterType.All) ||
+                    (filterType == MemberFilterType.Online && _currentMemberFilter != MemberFilterType.Online) ||
+                    (filterType == MemberFilterType.Offline && _currentMemberFilter != MemberFilterType.Offline))
+                {
+                    pill.Background = LinuxTheme.Current.CardHoverBg;
+                }
+            };
+            pill.PointerExited += (s, e) =>
+            {
+                UpdateChipVisuals();
             };
             pill.PointerPressed += (s, e) =>
             {
@@ -744,37 +767,29 @@ namespace SysMonitor.Linux.UI
             prefGrid.ColumnDefinitions.Add(new ColumnDefinition(6, GridUnitType.Pixel));
             prefGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
 
-            var btnTheme = new Button
-            {
-                Content = LinuxSettings.IsDark ? i18n.ThemeLight : i18n.ThemeDark,
-                FontSize = 10,
-                Foreground = theme.TextPrimary,
-                Background = theme.InnerTileBg,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(6, 4),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
-            btnTheme.Click += (s, e) => LinuxSettings.SetTheme(!LinuxSettings.IsDark);
+            var btnTheme = LinuxTheme.CreateActionButton(
+                LinuxSettings.IsDark ? i18n.ThemeLight : i18n.ThemeDark,
+                theme.TextPrimary,
+                theme.InnerTileBg,
+                theme.BorderBrush,
+                () => LinuxSettings.SetTheme(!LinuxSettings.IsDark),
+                new Thickness(6, 4),
+                10
+            );
+            btnTheme.HorizontalAlignment = HorizontalAlignment.Stretch;
             Grid.SetColumn(btnTheme, 0);
             prefGrid.Children.Add(btnTheme);
 
-            var btnLang = new Button
-            {
-                Content = LinuxSettings.Language == AppLanguage.Zh ? "🇺🇸 English" : "🇨🇳 简体中文",
-                FontSize = 10,
-                Foreground = theme.TextPrimary,
-                Background = theme.InnerTileBg,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(6, 4),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
-            btnLang.Click += (s, e) => LinuxSettings.SetLanguage(LinuxSettings.Language == AppLanguage.Zh ? AppLanguage.En : AppLanguage.Zh);
+            var btnLang = LinuxTheme.CreateActionButton(
+                LinuxSettings.Language == AppLanguage.Zh ? "🇺🇸 English" : "🇨🇳 简体中文",
+                theme.TextPrimary,
+                theme.InnerTileBg,
+                theme.BorderBrush,
+                () => LinuxSettings.SetLanguage(LinuxSettings.Language == AppLanguage.Zh ? AppLanguage.En : AppLanguage.Zh),
+                new Thickness(6, 4),
+                10
+            );
+            btnLang.HorizontalAlignment = HorizontalAlignment.Stretch;
             Grid.SetColumn(btnLang, 2);
             prefGrid.Children.Add(btnLang);
             sp.Children.Add(prefGrid);
@@ -869,50 +884,41 @@ namespace SysMonitor.Linux.UI
             // 3 Buttons in ONE ROW
             var pnlUpdateActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0), Spacing = 6 };
 
-            var btnCheckUp = new Button
-            {
-                Content = "🔄 " + i18n.CheckUpdate,
-                FontSize = 10,
-                Foreground = theme.AccentBlue,
-                Background = new SolidColorBrush(Color.FromArgb(25, 9, 105, 218)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 9, 105, 218)),
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3),
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
-            btnCheckUp.Click += (s, e) => CheckForAppUpdates();
+            var btnCheckUp = LinuxTheme.CreateActionButton(
+                "🔄 " + i18n.CheckUpdate,
+                theme.AccentBlue,
+                new SolidColorBrush(Color.FromArgb(25, 9, 105, 218)),
+                new SolidColorBrush(Color.FromArgb(80, 9, 105, 218)),
+                () => CheckForAppUpdates(),
+                new Thickness(8, 3),
+                10
+            );
             pnlUpdateActions.Children.Add(btnCheckUp);
 
-            _btnPullUpdate = new Button
-            {
-                Content = "⬇ " + i18n.DownloadUpdate,
-                FontSize = 10,
-                Foreground = theme.AccentEmerald,
-                Background = new SolidColorBrush(Color.FromArgb(30, 5, 150, 105)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 5, 150, 105)),
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3),
-                Cursor = new Cursor(StandardCursorType.Hand),
-                IsVisible = false
-            };
-            _btnPullUpdate.Click += (s, e) => PerformPullUpdate();
+            _btnPullUpdate = LinuxTheme.CreateActionButton(
+                "⬇ " + i18n.DownloadUpdate,
+                theme.AccentEmerald,
+                new SolidColorBrush(Color.FromArgb(30, 5, 150, 105)),
+                new SolidColorBrush(Color.FromArgb(90, 5, 150, 105)),
+                () => PerformPullUpdate(),
+                new Thickness(8, 3),
+                10
+            );
+            _btnPullUpdate.IsVisible = false;
             pnlUpdateActions.Children.Add(_btnPullUpdate);
 
-            var btnOpenRepo = new Button
-            {
-                Content = "🌐 GitHub",
-                FontSize = 10,
-                Foreground = theme.TextSecondary,
-                Background = theme.CardBg,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3),
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
-            btnOpenRepo.Click += (s, e) =>
-            {
-                try { Process.Start(new ProcessStartInfo("https://github.com/Nicotinamide/SysMonitor") { UseShellExecute = true }); } catch { }
-            };
+            var btnOpenRepo = LinuxTheme.CreateActionButton(
+                "🌐 GitHub",
+                theme.TextSecondary,
+                theme.CardBg,
+                theme.BorderBrush,
+                () =>
+                {
+                    try { Process.Start(new ProcessStartInfo("https://github.com/Nicotinamide/SysMonitor") { UseShellExecute = true }); } catch { }
+                },
+                new Thickness(8, 3),
+                10
+            );
             pnlUpdateActions.Children.Add(btnOpenRepo);
 
             upSp.Children.Add(pnlUpdateActions);
@@ -927,75 +933,66 @@ namespace SysMonitor.Linux.UI
             btnGrid.ColumnDefinitions.Add(new ColumnDefinition(6, GridUnitType.Pixel));
             btnGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
 
-            var btnTest = new Button
-            {
-                Content = "⚡ " + i18n.TestConnection,
-                FontSize = 10.5,
-                Foreground = theme.AccentBlue,
-                Background = new SolidColorBrush(Color.FromArgb(30, 9, 105, 218)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 9, 105, 218)),
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3),
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
-            btnTest.Click += (s, e) =>
-            {
-                _lblTestStatus.Text = "⏳ " + i18n.TestingConn;
-                _lblTestStatus.Foreground = theme.AccentAmber;
-                _ = _memberDir.TestConnectionAsync(_txtSettingUrl.Text, _txtSettingNwid.Text, _txtSettingToken.Text, (success, count, err) =>
+            var btnTest = LinuxTheme.CreateActionButton(
+                "⚡ " + i18n.TestConnection,
+                theme.AccentBlue,
+                new SolidColorBrush(Color.FromArgb(30, 9, 105, 218)),
+                new SolidColorBrush(Color.FromArgb(90, 9, 105, 218)),
+                () =>
                 {
-                    Dispatcher.UIThread.Post(() =>
+                    _lblTestStatus.Text = "⏳ " + i18n.TestingConn;
+                    _lblTestStatus.Foreground = theme.AccentAmber;
+                    _ = _memberDir.TestConnectionAsync(_txtSettingUrl.Text, _txtSettingNwid.Text, _txtSettingToken.Text, (success, count, err) =>
                     {
-                        if (success)
+                        Dispatcher.UIThread.Post(() =>
                         {
-                            _lblTestStatus.Text = string.Format(i18n.ConnSuccessFormat, count);
-                            _lblTestStatus.Foreground = theme.AccentEmerald;
-                        }
-                        else
-                        {
-                            _lblTestStatus.Text = string.Format(i18n.ConnFailedFormat, err);
-                            _lblTestStatus.Foreground = theme.AccentRed;
-                        }
+                            if (success)
+                            {
+                                _lblTestStatus.Text = string.Format(i18n.ConnSuccessFormat, count);
+                                _lblTestStatus.Foreground = theme.AccentEmerald;
+                            }
+                            else
+                            {
+                                _lblTestStatus.Text = string.Format(i18n.ConnFailedFormat, err);
+                                _lblTestStatus.Foreground = theme.AccentRed;
+                            }
+                        });
                     });
-                });
-            };
+                },
+                new Thickness(8, 3),
+                10.5
+            );
             Grid.SetColumn(btnTest, 0);
             btnGrid.Children.Add(btnTest);
 
-            var btnSave = new Button
-            {
-                Content = "💾 " + i18n.SaveConfig,
-                FontSize = 10.5,
-                Foreground = theme.AccentEmerald,
-                Background = new SolidColorBrush(Color.FromArgb(35, 5, 150, 105)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(100, 5, 150, 105)),
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(10, 3),
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
-            btnSave.Click += (s, e) =>
-            {
-                _memberDir.SaveEncryptedConfig(_txtSettingUrl.Text, _txtSettingNwid.Text, _txtSettingToken.Text);
-                overlay.IsVisible = false;
-                ShowToast("✓ " + (i18n.Lang == AppLanguage.Zh ? "设置已保存" : "Settings saved"));
-                _parentFloat?.ShowNotification(i18n.NotifySettingsSavedTitle, i18n.NotifySettingsSavedText, ToastType.Success, "💾");
-                UpdateZeroTierCardsVisibility();
-            };
+            var btnSave = LinuxTheme.CreateActionButton(
+                "💾 " + i18n.SaveConfig,
+                theme.AccentEmerald,
+                new SolidColorBrush(Color.FromArgb(35, 5, 150, 105)),
+                new SolidColorBrush(Color.FromArgb(100, 5, 150, 105)),
+                () =>
+                {
+                    _memberDir.SaveEncryptedConfig(_txtSettingUrl.Text, _txtSettingNwid.Text, _txtSettingToken.Text);
+                    overlay.IsVisible = false;
+                    ShowToast("✓ " + (i18n.Lang == AppLanguage.Zh ? "设置已保存" : "Settings saved"));
+                    _parentFloat?.ShowNotification(i18n.NotifySettingsSavedTitle, i18n.NotifySettingsSavedText, ToastType.Success, "💾");
+                    UpdateZeroTierCardsVisibility();
+                },
+                new Thickness(10, 3),
+                10.5
+            );
             Grid.SetColumn(btnSave, 2);
             btnGrid.Children.Add(btnSave);
 
-            var btnCancel = new Button
-            {
-                Content = "✕ " + i18n.Close,
-                FontSize = 10.5,
-                Foreground = theme.TextSecondary,
-                Background = Brushes.Transparent,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3),
-                Cursor = new Cursor(StandardCursorType.Hand)
-            };
-            btnCancel.Click += (s, e) => overlay.IsVisible = false;
+            var btnCancel = LinuxTheme.CreateActionButton(
+                "✕ " + i18n.Close,
+                theme.TextSecondary,
+                Brushes.Transparent,
+                theme.BorderBrush,
+                () => overlay.IsVisible = false,
+                new Thickness(8, 3),
+                10.5
+            );
             Grid.SetColumn(btnCancel, 4);
             btnGrid.Children.Add(btnCancel);
 
@@ -1626,6 +1623,7 @@ namespace SysMonitor.Linux.UI
             if (_tbMemberStatus != null)
             {
                 _tbMemberStatus.Text = status;
+                _tbMemberStatus.IsVisible = !string.IsNullOrEmpty(status) && (status.Contains("⏳") || status.Contains("⚠️") || status.Contains("错误") || status.Contains("Error"));
             }
         }
 
@@ -1679,6 +1677,16 @@ namespace SysMonitor.Linux.UI
                 var itemBorder = LinuxTheme.CreateInnerBorder();
                 itemBorder.Padding = new Thickness(6, 4, 6, 4);
                 itemBorder.Cursor = new Cursor(StandardCursorType.Hand);
+                itemBorder.PointerEntered += (s, e) =>
+                {
+                    itemBorder.Background = LinuxTheme.Current.CardHoverBg;
+                    itemBorder.BorderBrush = LinuxTheme.Current.AccentBlue;
+                };
+                itemBorder.PointerExited += (s, e) =>
+                {
+                    itemBorder.Background = LinuxTheme.Current.InnerTileBg;
+                    itemBorder.BorderBrush = LinuxTheme.Current.BorderBrush;
+                };
 
                 var itemGrid = new Grid();
                 itemGrid.ColumnDefinitions.Add(new ColumnDefinition(14, GridUnitType.Pixel));
