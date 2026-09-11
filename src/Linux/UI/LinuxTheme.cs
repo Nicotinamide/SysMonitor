@@ -267,7 +267,7 @@ namespace SysMonitor.Linux.UI
             return btn;
         }
 
-        public static Button CreateActionButton(string text, IBrush foreground, IBrush background, IBrush borderBrush, Action onClick, Thickness? padding = null, double fontSize = 10.5)
+        public static Button CreateActionButton(string text, IBrush foreground, IBrush background, IBrush borderBrush, Action onClick, Thickness? padding = null, double fontSize = 10)
         {
             var tb = new TextBlock
             {
@@ -281,10 +281,16 @@ namespace SysMonitor.Linux.UI
             var btn = new Button
             {
                 Content = tb,
+                FontSize = fontSize,
+                Height = 24,
+                MinHeight = 24,
+                MaxHeight = 24,
                 Background = background,
                 BorderBrush = borderBrush,
                 BorderThickness = new Thickness(0.8),
-                Padding = padding ?? new Thickness(8, 3),
+                CornerRadius = new CornerRadius(4),
+                Padding = padding ?? new Thickness(8, 0),
+                VerticalAlignment = VerticalAlignment.Center,
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
             if (onClick != null) btn.Click += (s, e) => onClick();

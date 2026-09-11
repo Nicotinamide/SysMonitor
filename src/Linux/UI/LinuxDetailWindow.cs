@@ -1348,7 +1348,15 @@ namespace SysMonitor.Linux.UI
 
                         if (_btnPullUpdate != null)
                         {
-                            _btnPullUpdate.Content = $"⬇ {curI18n.DownloadUpdate} ({info.LatestVersion})";
+                            if (_btnPullUpdate.Content is TextBlock tb)
+                            {
+                                tb.Text = "⬇ " + curI18n.DownloadUpdate;
+                            }
+                            else
+                            {
+                                _btnPullUpdate.Content = "⬇ " + curI18n.DownloadUpdate;
+                            }
+                            ToolTip.SetTip(_btnPullUpdate, $"{curI18n.DownloadUpdate} ({info.LatestVersion})");
                             _btnPullUpdate.IsVisible = true;
                         }
                     }

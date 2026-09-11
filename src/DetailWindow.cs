@@ -1061,79 +1061,62 @@ namespace SysMonitor
             // Action row: 检查更新、拉取更新（仅有更新时显示）、GitHub 放在同一排
             _pnlUpdateActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
 
-            Button btnCheckUp = new Button
-            {
-                Content = "🔄 " + i18n.CheckUpdate,
-                FontSize = 10,
-                Foreground = theme.AccentBlue,
-                Background = new SolidColorBrush(Color.FromArgb(25, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(80, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3, 8, 3),
-                Margin = new Thickness(0, 0, 6, 0),
-                Cursor = Cursors.Hand
-            };
-            btnCheckUp.Click += delegate { CheckForAppUpdates(true); };
+            Button btnCheckUp = CreateSmallActionButton(
+                "🔄 " + i18n.CheckUpdate,
+                theme.AccentBlue,
+                new SolidColorBrush(Color.FromArgb(25, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
+                new SolidColorBrush(Color.FromArgb(80, theme.AccentBlue.Color.R, theme.AccentBlue.Color.G, theme.AccentBlue.Color.B)),
+                delegate { CheckForAppUpdates(true); }
+            );
             _pnlUpdateActions.Children.Add(btnCheckUp);
 
-            _btnPullUpdate = new Button
-            {
-                Content = "⬇ " + i18n.DownloadUpdate,
-                FontSize = 10,
-                Foreground = theme.AccentEmerald,
-                Background = new SolidColorBrush(Color.FromArgb(30, theme.AccentEmerald.Color.R, theme.AccentEmerald.Color.G, theme.AccentEmerald.Color.B)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(90, theme.AccentEmerald.Color.R, theme.AccentEmerald.Color.G, theme.AccentEmerald.Color.B)),
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3, 8, 3),
-                Margin = new Thickness(0, 0, 6, 0),
-                Cursor = Cursors.Hand,
-                Visibility = Visibility.Collapsed
-            };
-            _btnPullUpdate.Click += delegate
-            {
-                if (!string.IsNullOrEmpty(_latestDownloadUrl))
+            _btnPullUpdate = CreateSmallActionButton(
+                "⬇ " + i18n.DownloadUpdate,
+                theme.AccentEmerald,
+                new SolidColorBrush(Color.FromArgb(30, theme.AccentEmerald.Color.R, theme.AccentEmerald.Color.G, theme.AccentEmerald.Color.B)),
+                new SolidColorBrush(Color.FromArgb(90, theme.AccentEmerald.Color.R, theme.AccentEmerald.Color.G, theme.AccentEmerald.Color.B)),
+                delegate
                 {
-                    _tbUpdateStatus.Text = "⏳ " + I18n.Current.CheckingUpdate;
-                    _btnPullUpdate.IsEnabled = false;
-                    UpdateChecker.DownloadAndApplyUpdateAsync(_latestDownloadUrl,
-                        delegate(int pct)
-                        {
-                            Dispatcher.BeginInvoke(new Action(delegate
+                    if (!string.IsNullOrEmpty(_latestDownloadUrl))
+                    {
+                        _tbUpdateStatus.Text = "⏳ " + I18n.Current.CheckingUpdate;
+                        _btnPullUpdate.IsEnabled = false;
+                        UpdateChecker.DownloadAndApplyUpdateAsync(_latestDownloadUrl,
+                            delegate(int pct)
                             {
-                                _tbUpdateStatus.Text = string.Format("⏳ 下载中... {0}%", pct);
-                            }));
-                        },
-                        delegate(bool ok, string msg)
-                        {
-                            Dispatcher.BeginInvoke(new Action(delegate
+                                Dispatcher.BeginInvoke(new Action(delegate
+                                {
+                                    _tbUpdateStatus.Text = string.Format("⏳ 下载中... {0}%", pct);
+                                }));
+                            },
+                            delegate(bool ok, string msg)
                             {
-                                _btnPullUpdate.IsEnabled = true;
-                                _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
-                            }));
-                        });
+                                Dispatcher.BeginInvoke(new Action(delegate
+                                {
+                                    _btnPullUpdate.IsEnabled = true;
+                                    _tbUpdateStatus.Text = (ok ? "✓ " : "✕ ") + msg;
+                                }));
+                            });
+                    }
+                    else if (!string.IsNullOrEmpty(_latestReleasePageUrl))
+                    {
+                        try { Process.Start(_latestReleasePageUrl); } catch { }
+                    }
                 }
-                else if (!string.IsNullOrEmpty(_latestReleasePageUrl))
-                {
-                    try { Process.Start(_latestReleasePageUrl); } catch { }
-                }
-            };
+            );
+            _btnPullUpdate.Visibility = Visibility.Collapsed;
             _pnlUpdateActions.Children.Add(_btnPullUpdate);
 
-            Button btnOpenRepo = new Button
-            {
-                Content = "🌐 GitHub",
-                FontSize = 10,
-                Foreground = theme.TextSecondary,
-                Background = theme.CardBg,
-                BorderBrush = theme.BorderBrush,
-                BorderThickness = new Thickness(0.8),
-                Padding = new Thickness(8, 3, 8, 3),
-                Cursor = Cursors.Hand
-            };
-            btnOpenRepo.Click += delegate
-            {
-                try { Process.Start("https://github.com/Nicotinamide/SysMonitor"); } catch { }
-            };
+            Button btnOpenRepo = CreateSmallActionButton(
+                "🌐 GitHub",
+                theme.TextSecondary,
+                theme.CardBg,
+                theme.BorderBrush,
+                delegate
+                {
+                    try { Process.Start("https://github.com/Nicotinamide/SysMonitor"); } catch { }
+                }
+            );
             _pnlUpdateActions.Children.Add(btnOpenRepo);
 
             updateSp.Children.Add(_pnlUpdateActions);
@@ -1302,7 +1285,8 @@ namespace SysMonitor
 
                         if (_btnPullUpdate != null)
                         {
-                            _btnPullUpdate.Content = "⬇ " + i18n.DownloadUpdate + " (" + info.LatestVersion + ")";
+                            _btnPullUpdate.Content = "⬇ " + i18n.DownloadUpdate;
+                            _btnPullUpdate.ToolTip = string.Format("{0} ({1})", i18n.DownloadUpdate, info.LatestVersion);
                             _btnPullUpdate.Visibility = Visibility.Visible;
                         }
                     }
@@ -2431,6 +2415,52 @@ namespace SysMonitor
                 btn.Click += onClick;
             }
 
+            return btn;
+        }
+
+        private Button CreateSmallActionButton(string content, SolidColorBrush fg, Brush bg, Brush border, RoutedEventHandler onClick)
+        {
+            Button btn = new Button
+            {
+                Content = content,
+                FontSize = 10,
+                Foreground = fg,
+                Background = bg,
+                BorderBrush = border,
+                BorderThickness = new Thickness(0.8),
+                Height = 22,
+                Padding = new Thickness(8, 0, 8, 0),
+                Margin = new Thickness(0, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Cursor = Cursors.Hand,
+                FocusVisualStyle = null
+            };
+
+            string xaml = @"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                                             TargetType='Button'>
+                <Border x:Name='Bd' Background='{TemplateBinding Background}' 
+                        BorderBrush='{TemplateBinding BorderBrush}' 
+                        BorderThickness='{TemplateBinding BorderThickness}' 
+                        CornerRadius='4' 
+                        Padding='{TemplateBinding Padding}'
+                        SnapsToDevicePixels='True'>
+                    <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/>
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property='IsMouseOver' Value='True'>
+                        <Setter Property='Opacity' Value='0.85'/>
+                    </Trigger>
+                    <Trigger Property='IsPressed' Value='True'>
+                        <Setter Property='Opacity' Value='0.65'/>
+                    </Trigger>
+                    <Trigger Property='IsEnabled' Value='False'>
+                        <Setter Property='Opacity' Value='0.4'/>
+                    </Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate>";
+
+            btn.Template = (ControlTemplate)XamlReader.Parse(xaml);
+            if (onClick != null) btn.Click += onClick;
             return btn;
         }
 
