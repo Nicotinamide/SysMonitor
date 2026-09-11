@@ -1,0 +1,150 @@
+name: SysMonitor Cross-Platform CI/CD
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # 1. Linux x86_64 原生 AOT 构建
+  # ==========================================
+  build-linux-x64:
+    name: Build Linux x86_64 (Native AOT)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Native Toolchain & FreeDesktop Libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev libkrb5-dev libx11-dev libice-dev libsm-dev libfontconfig1-dev
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Native AOT (linux-x64)
+        run: |
+          dotnet publish SysMonitor.csproj \
+            -r linux-x64 \
+            -c Release \
+            -p:PublishAot=true \
+            -p:PublishSingleFile=true \
+            -p:StripSymbols=true \
+            -o ./dist/linux-x64
+
+      - name: Package Linux x64 Bundle
+        run: |
+          cd ./dist/linux-x64
+          cp ../../scripts/sysmonitor.desktop .
+          cp ../../app.png .
+          tar -czvf ../../sysmonitor-linux-x64.tar.gz sysmonitor sysmonitor.desktop app.png
+          cd ../..
+
+      - name: Upload Linux x64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysmonitor-linux-x64
+          path: sysmonitor-linux-x64.tar.gz
+
+  # ==========================================
+  # 2. Linux ARM64 (aarch64) 原生构建
+  # ==========================================
+  build-linux-arm64:
+    name: Build Linux ARM64 (aarch64)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Native Toolchain & FreeDesktop Libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev libkrb5-dev libx11-dev libice-dev libsm-dev libfontconfig1-dev
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Native AOT (linux-arm64)
+        run: |
+          dotnet publish SysMonitor.csproj \
+            -r linux-arm64 \
+            -c Release \
+            -p:PublishAot=true \
+            -p:PublishSingleFile=true \
+            -p:StripSymbols=true \
+            -o ./dist/linux-arm64
+
+      - name: Package Linux ARM64 Bundle
+        run: |
+          cd ./dist/linux-arm64
+          cp ../../scripts/sysmonitor.desktop .
+          cp ../../app.png .
+          tar -czvf ../../sysmonitor-linux-arm64.tar.gz sysmonitor sysmonitor.desktop app.png
+          cd ../..
+
+      - name: Upload Linux ARM64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysmonitor-linux-arm64
+          path: sysmonitor-linux-arm64.tar.gz
+
+  # ==========================================
+  # 3. Windows x64 构建 (.NET Framework & AOT)
+  # ==========================================
+  build-windows-x64:
+    name: Build Windows x64 (Native)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Compile Native C# WPF SysMonitor.exe
+        shell: cmd
+        run: |
+          call "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /codepage:65001 /target:winexe /optimize+ /win32icon:app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Xaml.dll /r:System.Web.Extensions.dll /r:System.Security.dll /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" /out:SysMonitor.exe src\*.cs
+
+      - name: Compress Windows Release Bundle
+        shell: pwsh
+        run: |
+          Compress-Archive -Path SysMonitor.exe, app.ico, README.md -DestinationPath sysmonitor-windows-x64.zip
+
+      - name: Upload Windows x64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysmonitor-windows-x64
+          path: sysmonitor-windows-x64.zip
+
+  # ==========================================
+  # 4. 发布 GitHub Release (在 Tag 或 Release 时触发)
+  # ==========================================
+  create-release:
+    name: Publish Release Assets
+    needs: [build-linux-x64, build-linux-arm64, build-windows-x64]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sysmonitor-linux-x64/sysmonitor-linux-x64.tar.gz
+            sysmonitor-linux-arm64/sysmonitor-linux-arm64.tar.gz
+            sysmonitor-windows-x64/sysmonitor-windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,27 @@
+# User configs & local secrets
+*.secret
+*config*.json
+*settings*.json
+*members*.json
+*.log
+*.tmp
+
+# Build outputs
+bin/
+obj/
+dist/
+*.exe
+*.dll
+*.pdb
+*.so
+*.dylib
+SysMonitor.exe
+refresh_icon_cache.exe
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

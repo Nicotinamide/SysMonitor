@@ -1,0 +1,46 @@
+# Maintainer: Nicotinamide <369666476@qq.com>
+# Contributor: SysMonitor Contributors
+pkgname=sysmonitor
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Native Lightweight Desktop Floating Complication & ZeroTier Controller Telemetry Monitor"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Nicotinamide/SysMonitor"
+license=('MIT')
+depends=('fontconfig' 'libx11' 'libice' 'libsm' 'krb5' 'zlib')
+makedepends=('dotnet-sdk>=8.0' 'clang')
+optdepends=(
+    'zerotier-one: for local ZeroTier node and Moon orbital link telemetry'
+)
+provides=('sysmonitor')
+conflicts=('sysmonitor-bin' 'sysmonitor-git')
+
+build() {
+    cd "${srcdir}/.."
+    if [ "$CARCH" = "x86_64" ]; then
+        _target_rid="linux-x64"
+    elif [ "$CARCH" = "aarch64" ]; then
+        _target_rid="linux-arm64"
+    else
+        _target_rid="linux-x64"
+    fi
+
+    dotnet publish SysMonitor.csproj \
+        -r "$_target_rid" \
+        -c Release \
+        -p:PublishAot=true \
+        -p:PublishSingleFile=true \
+        -p:StripSymbols=true \
+        -o "${srcdir}/publish"
+}
+
+package() {
+    # 1. 安装主可执行程序
+    install -Dm755 "${srcdir}/publish/sysmonitor" "${pkgdir}/usr/bin/sysmonitor"
+
+    # 2. 安装标准桌面图标 (256x256)
+    install -Dm644 "${srcdir}/../app.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/sysmonitor.png"
+
+    # 3. 安装 FreeDesktop 桌面快捷方式
+    install -Dm644 "${srcdir}/../scripts/sysmonitor.desktop" "${pkgdir}/usr/share/applications/sysmonitor.desktop"
+}

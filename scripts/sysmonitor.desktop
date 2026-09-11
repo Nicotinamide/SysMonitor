@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=SysMonitor
+GenericName=System & ZeroTier Monitor
+Comment=Lightweight Desktop Floating Complication & ZeroTier Controller Monitor
+Exec=sysmonitor
+Icon=sysmonitor
+Terminal=false
+Type=Application
+Categories=System;Monitor;Network;Utility;
+Keywords=system;monitor;zerotier;telemetry;widget;battery;moon;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
