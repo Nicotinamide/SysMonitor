@@ -146,6 +146,10 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
+          name: "SysMonitor ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
           files: |
             sysmonitor-linux-x64/sysmonitor-linux-x64.tar.gz
             sysmonitor-linux-arm64/sysmonitor-linux-arm64.tar.gz
