@@ -9,6 +9,9 @@
     <RootNamespace>SysMonitor</RootNamespace>
     <AssemblyName>sysmonitor</AssemblyName>
 
+    <!-- 彻底关闭 SDK 默认的通配源码包含，按平台严格精准包含，根治跨平台源码交叉污染 -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+
     <!-- Native AOT 发布配置 -->
     <PublishAot Condition="'$(PublishAot)' == ''">true</PublishAot>
     <PublishSingleFile>true</PublishSingleFile>
@@ -24,29 +27,14 @@
     <PublishAot>false</PublishAot>
   </PropertyGroup>
 
-  <!-- 排除 tools 目录中的辅助编译脚本，避免产生多入口冲突 CS0017 -->
-  <ItemGroup>
-    <Compile Remove="tools/**" />
-    <None Include="tools/**" />
-  </ItemGroup>
-
-  <!-- Linux 平台：仅编译 Linux 原生引擎与平台通用逻辑，排除 Windows 专有 WPF 代码 (使用标准正斜杠兼容 Linux MSBuild) -->
+  <!-- Linux 平台：仅编译 Linux 原生引擎，完全隔离 Windows WPF 专有代码 -->
   <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
-    <Compile Remove="src/MainWindow.cs" />
-    <Compile Remove="src/DetailWindow.cs" />
-    <Compile Remove="src/ToastNotification.cs" />
-    <Compile Remove="src/AppTheme.cs" />
-    <Compile Remove="src/Monitors.cs" />
-    <Compile Remove="src/Program.cs" />
-    <Compile Remove="src/Models.cs" />
-    <Compile Remove="src/MemberDirectory.cs" />
-    <Compile Remove="src/AppSettings.cs" />
-    <Compile Remove="src/FlagAssets.cs" />
+    <Compile Include="src/Linux/*.cs" />
   </ItemGroup>
 
-  <!-- Windows 平台：排除 Linux 专用驱动与 Linux 入口 -->
+  <!-- Windows 平台：编译 Windows 源码 -->
   <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
-    <Compile Remove="src/Linux/**" />
+    <Compile Include="src/*.cs" />
   </ItemGroup>
 
   <!-- 包含多分辨率图标和桌面配置 -->
