@@ -40,6 +40,49 @@ namespace SysMonitor
         public const string RepoOwner = "Nicotinamide";
         public const string RepoName = "SysMonitor";
 
+        private static bool _isAvaloniaExplicit = false;
+        private static bool _isAvalonia = false;
+
+        public static bool IsAvalonia
+        {
+            get
+            {
+                if (!_isAvaloniaExplicit)
+                {
+                    try
+                    {
+                        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
+                        {
+                            return true;
+                        }
+                        return Environment.Version.Major >= 5 || Type.GetType("Avalonia.Application, Avalonia") != null;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }
+                return _isAvalonia;
+            }
+            set
+            {
+                _isAvalonia = value;
+                _isAvaloniaExplicit = true;
+            }
+        }
+
+        public static string EditionName
+        {
+            get
+            {
+                if (IsAvalonia)
+                {
+                    return Environment.OSVersion.Platform == PlatformID.Win32NT ? "Avalonia (Win)" : "Avalonia (Linux)";
+                }
+                return "WPF Native (480KB)";
+            }
+        }
+
         static UpdateChecker()
         {
             try
@@ -147,32 +190,52 @@ namespace SysMonitor
                 info.ReleaseNotes = Regex.Unescape(rawBody);
             }
 
-            // 提取匹配当前系统的下载链接
-            // Windows: 绝对优先匹配独立 EXE (SysMonitor.exe)，次选 windows*.zip 避免把压缩包直接当可执行程序下载
+            // 提取匹配当前系统与版本架构的下载链接 (严格物理隔离 Native WPF 与 Avalonia 跨平台版)
             if (Environment.OSVersion.Platform == PlatformID.Win32NT)
             {
-                var exeMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*SysMonitor\\.exe)\"", RegexOptions.IgnoreCase);
-                if (!exeMatch.Success)
+                if (IsAvalonia)
                 {
-                    exeMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*\\.exe)\"", RegexOptions.IgnoreCase);
-                }
+                    // Windows 下运行 Avalonia 现代跨平台版：精准匹配 Avalonia 资产
+                    Match avaExeMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*avalonia[^\"]*\\.exe)\"", RegexOptions.IgnoreCase);
+                    Match avaZipMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*avalonia[^\"]*\\.zip)\"", RegexOptions.IgnoreCase);
 
-                if (exeMatch.Success)
-                {
-                    info.DownloadUrl = exeMatch.Groups[1].Value;
+                    if (avaExeMatch.Success)
+                    {
+                        info.DownloadUrl = avaExeMatch.Groups[1].Value;
+                    }
+                    else if (avaZipMatch.Success)
+                    {
+                        info.DownloadUrl = avaZipMatch.Groups[1].Value;
+                    }
                 }
                 else
                 {
-                    var zipMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*windows[^\"]*\\.zip)\"", RegexOptions.IgnoreCase);
-                    if (zipMatch.Success)
+                    // Windows 下运行原生极简 WPF 版 (480KB)：精准匹配原生独立 EXE (SysMonitor.exe) 或 wpf.zip
+                    Match wpfExeMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*SysMonitor\\.exe)\"", RegexOptions.IgnoreCase);
+                    Match wpfZipMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*wpf[^\"]*\\.zip)\"", RegexOptions.IgnoreCase);
+
+                    if (wpfExeMatch.Success)
                     {
-                        info.DownloadUrl = zipMatch.Groups[1].Value;
+                        info.DownloadUrl = wpfExeMatch.Groups[1].Value;
+                    }
+                    else if (wpfZipMatch.Success)
+                    {
+                        info.DownloadUrl = wpfZipMatch.Groups[1].Value;
+                    }
+                    else
+                    {
+                        // 兜底备选普通 exe（排除 avalonia 命名）
+                        Match anyExeMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*(?<!avalonia)\\.exe)\"", RegexOptions.IgnoreCase);
+                        if (anyExeMatch.Success)
+                        {
+                            info.DownloadUrl = anyExeMatch.Groups[1].Value;
+                        }
                     }
                 }
             }
             else
             {
-                // Linux: 检测 CPU 架构以精准匹配 arm64 或 x64
+                // Linux: 始终为 Avalonia，检测 CPU 架构以精准匹配 arm64 或 x64
                 bool isArm64 = false;
                 try
                 {
@@ -192,7 +255,7 @@ namespace SysMonitor
                     ? "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*arm64[^\"]*\\.tar\\.gz)\""
                     : "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*x64[^\"]*\\.tar\\.gz)\"";
 
-                var linuxMatch = Regex.Match(json, pattern, RegexOptions.IgnoreCase);
+                Match linuxMatch = Regex.Match(json, pattern, RegexOptions.IgnoreCase);
                 if (!linuxMatch.Success)
                 {
                     linuxMatch = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*linux[^\"]*\\.tar\\.gz)\"", RegexOptions.IgnoreCase);
@@ -463,16 +526,27 @@ namespace SysMonitor
                             if (p != null) p.WaitForExit(30000);
                         }
 
-                        string foundExe = Path.Combine(extractDir, "SysMonitor.exe");
-                        if (!File.Exists(foundExe))
+                        string foundExe = null;
+                        if (IsAvalonia)
+                        {
+                            string[] avaExes = Directory.GetFiles(extractDir, "*avalonia*.exe", SearchOption.AllDirectories);
+                            if (avaExes.Length > 0) foundExe = avaExes[0];
+                        }
+                        else
+                        {
+                            string wpfExe = Path.Combine(extractDir, "SysMonitor.exe");
+                            if (File.Exists(wpfExe)) foundExe = wpfExe;
+                        }
+
+                        if (string.IsNullOrEmpty(foundExe) || !File.Exists(foundExe))
                         {
                             string[] exes = Directory.GetFiles(extractDir, "*.exe", SearchOption.AllDirectories);
                             if (exes.Length > 0) foundExe = exes[0];
                         }
 
-                        if (!File.Exists(foundExe))
+                        if (string.IsNullOrEmpty(foundExe) || !File.Exists(foundExe))
                         {
-                            if (finishCallback != null) finishCallback(false, "压缩包中未找到 SysMonitor.exe");
+                            if (finishCallback != null) finishCallback(false, "压缩包中未找到匹配的可执行程序");
                             return;
                         }
 

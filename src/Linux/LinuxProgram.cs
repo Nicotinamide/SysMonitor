@@ -25,6 +25,7 @@ namespace SysMonitor.Linux
         [STAThread]
         public static void Main(string[] args)
         {
+            UpdateChecker.IsAvalonia = true;
             string crashLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "sysmonitor_crash.log");
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {

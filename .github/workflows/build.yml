@@ -163,7 +163,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sysmonitor-windows-avalonia
-          path: sysmonitor-windows-avalonia-x64.zip
+          path: |
+            sysmonitor-avalonia.exe
+            sysmonitor-windows-avalonia-x64.zip
 
   # ==========================================
   # 5. 发布 GitHub Release (在 Tag 或 Release 时触发)
@@ -187,6 +189,7 @@ jobs:
           files: |
             sysmonitor-windows-wpf/SysMonitor.exe
             sysmonitor-windows-wpf/sysmonitor-windows-wpf.zip
+            sysmonitor-windows-avalonia/sysmonitor-avalonia.exe
             sysmonitor-windows-avalonia/sysmonitor-windows-avalonia-x64.zip
             sysmonitor-linux-x64/sysmonitor-linux-x64.tar.gz
             sysmonitor-linux-arm64/sysmonitor-linux-arm64.tar.gz

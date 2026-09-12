@@ -35,6 +35,8 @@ namespace SysMonitor
         [STAThread]
         static void Main(string[] args)
         {
+            UpdateChecker.IsAvalonia = false;
+
             // Initialize AppSettings (theme & language) before creating any UI or window
             try
             {
