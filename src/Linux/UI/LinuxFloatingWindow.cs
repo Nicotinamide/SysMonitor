@@ -1,5 +1,8 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -53,6 +56,7 @@ namespace SysMonitor.Linux.UI
         private LinuxPowerData _lastPower;
         private LinuxNetworkData _lastNet;
         private LinuxZeroTierData _lastZt;
+        private bool _prevZtAvailable = true;
 
         // Drag & Click Management
         private Point _pointerDownPos;
@@ -81,6 +85,11 @@ namespace SysMonitor.Linux.UI
             BuildUi();
             SetupContextMenu();
 
+            Closed += (s, e) =>
+            {
+                try { _detailWindow?.Close(); } catch { }
+            };
+
             // Drag & Click tracking (1:1 with Windows behavior)
             PointerPressed += OnPointerPressed;
             PointerMoved += OnPointerMoved;
@@ -91,9 +100,7 @@ namespace SysMonitor.Linux.UI
                 Dispatcher.UIThread.Post(() =>
                 {
                     RequestedThemeVariant = LinuxSettings.IsDark ? Avalonia.Styling.ThemeVariant.Dark : Avalonia.Styling.ThemeVariant.Light;
-                    BuildUi();
-                    SetupContextMenu();
-                    ReplayTelemetry();
+                    RebuildUi();
                 });
             };
 
@@ -156,6 +163,14 @@ namespace SysMonitor.Linux.UI
             });
         }
 
+        private void RebuildUi()
+        {
+            BuildUi();
+            SetupContextMenu();
+            ReplayTelemetry();
+            SnapToScreenEdge();
+        }
+
         private void BuildUi()
         {
             var theme = LinuxTheme.Current;
@@ -176,10 +191,12 @@ namespace SysMonitor.Linux.UI
 
             var order = LinuxSettings.ModuleOrder;
             var enabled = LinuxSettings.ModuleEnabled;
+            bool ztAvailable = _lastZt == null || (_lastZt.IsInstalled && _lastZt.IsRunning);
 
             foreach (var mod in order)
             {
                 if (!enabled.Contains(mod)) continue;
+                if (mod == LinuxSettings.ModuleZeroTier && !ztAvailable) continue;
 
                 if (mod == LinuxSettings.ModulePower)
                 {
@@ -551,19 +568,24 @@ namespace SysMonitor.Linux.UI
             var i18n = I18n.Current;
             var menu = new ContextMenu();
 
-            var miDetail = new MenuItem { Header = "📋 " + i18n.MenuDetail };
+            var miDetail = new MenuItem { Header = i18n.MenuDetail };
             miDetail.Click += (s, e) => ToggleDetailWindow();
             menu.Items.Add(miDetail);
 
-            var miSearch = new MenuItem { Header = "🔍 " + i18n.MenuSearch };
+            var miSearch = new MenuItem { Header = i18n.MenuSearch };
             miSearch.Click += (s, e) =>
             {
-                if (_detailWindow == null || !_detailWindow.IsVisible) ToggleDetailWindow();
+                if (_detailWindow == null || !_detailWindow.IsVisible)
+                {
+                    PositionDetailWindow();
+                    _detailWindow?.Show();
+                }
+                _detailWindow?.Activate();
                 _detailWindow?.FocusSearch();
             };
             menu.Items.Add(miSearch);
 
-            var miRefresh = new MenuItem { Header = i18n.Lang == AppLanguage.Zh ? "⟳ 刷新公网出口与遥测" : "⟳ Refresh Public IP & Telemetry" };
+            var miRefresh = new MenuItem { Header = i18n.Lang == AppLanguage.Zh ? "⟳ 刷新公网出口与归属" : "⟳ Refresh Public IP & Geo" };
             miRefresh.Click += (s, e) => _engine?.TriggerGeoIpRefresh();
             menu.Items.Add(miRefresh);
 
@@ -579,7 +601,21 @@ namespace SysMonitor.Linux.UI
 
             menu.Items.Add(new Separator());
 
-            var miExit = new MenuItem { Header = "🚪 " + i18n.MenuExit };
+            // 6. Auto-start Toggle Item
+            bool isAuto = IsAutoStartEnabled();
+            string autoText = (isAuto ? "✓ " : "   ") + i18n.MenuStartup;
+            var miAuto = new MenuItem { Header = autoText };
+            miAuto.Click += (s, e) =>
+            {
+                bool newState = !IsAutoStartEnabled();
+                SetAutoStart(newState);
+                SetupContextMenu();
+            };
+            menu.Items.Add(miAuto);
+
+            menu.Items.Add(new Separator());
+
+            var miExit = new MenuItem { Header = i18n.MenuExit };
             miExit.Click += (s, e) =>
             {
                 _detailWindow?.Close();
@@ -610,6 +646,8 @@ namespace SysMonitor.Linux.UI
                 {
                     _isDragging = true;
                     BeginMoveDrag(_pointerPressedArgs);
+                    _isDragging = false;
+                    SnapToScreenEdge();
                 }
             }
         }
@@ -622,8 +660,13 @@ namespace SysMonitor.Linux.UI
                 {
                     ToggleDetailWindow();
                 }
-                _isDragging = false;
+                else
+                {
+                    SnapToScreenEdge();
+                    _isDragging = false;
+                }
             }
+            _pointerPressedArgs = null;
         }
 
         public void ToggleDetailWindow()
@@ -802,6 +845,13 @@ namespace SysMonitor.Linux.UI
 
         private void OnZeroTierUpdated(LinuxZeroTierData data)
         {
+            bool currentZtAvailable = data != null && (data.IsInstalled && data.IsRunning);
+            if (_lastZt != null && currentZtAvailable != _prevZtAvailable)
+            {
+                _prevZtAvailable = currentZtAvailable;
+                Dispatcher.UIThread.Post(RebuildUi);
+            }
+            _prevZtAvailable = currentZtAvailable;
             _lastZt = data;
             var theme = LinuxTheme.Current;
             var i18n = I18n.Current;
@@ -854,6 +904,137 @@ namespace SysMonitor.Linux.UI
             if (_lastPower != null) OnPowerUpdated(_lastPower);
             if (_lastNet != null) OnNetworkUpdated(_lastNet);
             if (_lastZt != null) OnZeroTierUpdated(_lastZt);
+        }
+
+        private void SnapToScreenEdge()
+        {
+            try
+            {
+                var screen = Screens.ScreenFromPoint(Position) ?? Screens.Primary ?? Screens.All.FirstOrDefault();
+                if (screen == null) return;
+
+                var area = screen.WorkingArea;
+                int curX = Position.X;
+                int curY = Position.Y;
+                int width = (int)Bounds.Width;
+                if (width <= 0) width = (int)WidgetWidth;
+                int height = (int)Bounds.Height;
+                if (height <= 0) height = 120;
+
+                int margin = 8;
+                int snapThreshold = 32;
+
+                int targetX = curX;
+                int targetY = curY;
+
+                // Snap Left
+                if (curX - area.X < snapThreshold)
+                {
+                    targetX = area.X + margin;
+                }
+                // Snap Right
+                else if ((area.X + area.Width) - (curX + width) < snapThreshold)
+                {
+                    targetX = area.X + area.Width - width - margin;
+                }
+
+                // Snap Top
+                if (curY - area.Y < snapThreshold)
+                {
+                    targetY = area.Y + margin;
+                }
+                // Snap Bottom
+                else if ((area.Y + area.Height) - (curY + height) < snapThreshold)
+                {
+                    targetY = area.Y + area.Height - height - margin;
+                }
+
+                // Clamp to screen bounds
+                if (targetX < area.X) targetX = area.X;
+                if (targetX + width > area.X + area.Width) targetX = area.X + area.Width - width;
+                if (targetY < area.Y) targetY = area.Y;
+                if (targetY + height > area.Y + area.Height) targetY = area.Y + area.Height - height;
+
+                Position = new PixelPoint(targetX, targetY);
+            }
+            catch { }
+        }
+
+        private static bool IsAutoStartEnabled()
+        {
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    var psi = new ProcessStartInfo("reg.exe", "query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v SysMonitorWidget")
+                    {
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true
+                    };
+                    using (var p = Process.Start(psi))
+                    {
+                        p?.WaitForExit(1000);
+                        return p != null && p.ExitCode == 0;
+                    }
+                }
+                else
+                {
+                    string desktopPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "autostart", "sysmonitor.desktop");
+                    return File.Exists(desktopPath);
+                }
+            }
+            catch { return false; }
+        }
+
+        private static void SetAutoStart(bool enable)
+        {
+            try
+            {
+                string exePath = Process.GetCurrentProcess().MainModule?.FileName;
+                if (string.IsNullOrEmpty(exePath))
+                {
+                    exePath = Environment.ProcessPath;
+                }
+
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    if (enable && !string.IsNullOrEmpty(exePath))
+                    {
+                        var psi = new ProcessStartInfo("reg.exe", $"add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v SysMonitorWidget /t REG_SZ /d \"\\\"{exePath}\\\"\" /f")
+                        {
+                            CreateNoWindow = true,
+                            UseShellExecute = false
+                        };
+                        using (var p = Process.Start(psi)) { p?.WaitForExit(2000); }
+                    }
+                    else
+                    {
+                        var psi = new ProcessStartInfo("reg.exe", "delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v SysMonitorWidget /f")
+                        {
+                            CreateNoWindow = true,
+                            UseShellExecute = false
+                        };
+                        using (var p = Process.Start(psi)) { p?.WaitForExit(2000); }
+                    }
+                }
+                else
+                {
+                    string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "autostart");
+                    string desktopPath = Path.Combine(dir, "sysmonitor.desktop");
+                    if (enable && !string.IsNullOrEmpty(exePath))
+                    {
+                        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                        string content = $"[Desktop Entry]\nType=Application\nName=SysMonitor\nExec=\"{exePath}\"\nIcon=sysmonitor\nTerminal=false\nX-GNOME-Autostart-enabled=true\nCategories=System;Monitor;Network;Utility;\n";
+                        File.WriteAllText(desktopPath, content);
+                    }
+                    else
+                    {
+                        if (File.Exists(desktopPath)) File.Delete(desktopPath);
+                    }
+                }
+            }
+            catch { }
         }
     }
 }

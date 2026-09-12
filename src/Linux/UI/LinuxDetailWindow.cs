@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -128,6 +129,26 @@ namespace SysMonitor.Linux.UI
             _memberDir.ConfigChanged += () => Dispatcher.UIThread.Post(() => UpdateZeroTierCardsVisibility());
 
             BuildUi();
+
+            KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Escape)
+                {
+                    e.Handled = true;
+                    if (_overlaySettings != null && _overlaySettings.IsVisible)
+                    {
+                        _overlaySettings.IsVisible = false;
+                    }
+                    else if (_searchBoxBorder != null && _searchBoxBorder.IsVisible)
+                    {
+                        ToggleSearchBox();
+                    }
+                    else
+                    {
+                        Hide();
+                    }
+                }
+            };
 
             LinuxSettings.SettingsChanged += () =>
             {
@@ -597,6 +618,22 @@ namespace SysMonitor.Linux.UI
                 FontSize = 10.5
             };
             _tbMemberSearch.KeyUp += (s, e) => ApplyMemberFilterAndSearch();
+            _tbMemberSearch.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Escape)
+                {
+                    e.Handled = true;
+                    if (!string.IsNullOrEmpty(_tbMemberSearch.Text))
+                    {
+                        _tbMemberSearch.Text = "";
+                        ApplyMemberFilterAndSearch();
+                    }
+                    else
+                    {
+                        ToggleSearchBox();
+                    }
+                }
+            };
             Grid.SetColumn(_tbMemberSearch, 0);
             sGrid.Children.Add(_tbMemberSearch);
 
@@ -1731,7 +1768,7 @@ namespace SysMonitor.Linux.UI
                 var spInfo = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
                 var tbName = new TextBlock
                 {
-                    Text = string.IsNullOrEmpty(m.Name) ? "未命名设备" : m.Name,
+                    Text = string.IsNullOrEmpty(m.Name) ? (i18n.Lang == AppLanguage.Zh ? "未命名设备" : "Unnamed Device") : m.Name,
                     FontSize = 10.5,
                     FontWeight = FontWeight.SemiBold,
                     Foreground = theme.TextPrimary,
@@ -1796,29 +1833,74 @@ namespace SysMonitor.Linux.UI
 
                 // Context menu
                 var ctx = new ContextMenu();
-                var miCopyIp = new MenuItem { Header = string.Format(i18n.MenuCopyIpFormat, copyTarget) };
-                miCopyIp.Click += async (s, e) =>
+                if (!string.IsNullOrEmpty(m.Ip))
                 {
-                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-                    if (clipboard != null)
+                    var miCopyIp = new MenuItem { Header = string.Format(i18n.MenuCopyIpFormat, m.Ip) };
+                    miCopyIp.Click += async (s, e) =>
                     {
-                        await clipboard.SetTextAsync(copyTarget);
-                        ShowToast(string.Format(i18n.CopiedIpFormat, copyTarget));
-                    }
-                };
-                ctx.Items.Add(miCopyIp);
+                        try
+                        {
+                            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                            if (clipboard != null)
+                            {
+                                await clipboard.SetTextAsync(m.Ip);
+                                ShowToast(string.Format(i18n.CopiedIpFormat, m.Ip));
+                            }
+                        }
+                        catch { }
+                    };
+                    ctx.Items.Add(miCopyIp);
+                }
 
                 var miCopyId = new MenuItem { Header = string.Format(i18n.MenuCopyIdFormat, m.Id) };
                 miCopyId.Click += async (s, e) =>
                 {
-                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-                    if (clipboard != null)
+                    try
                     {
-                        await clipboard.SetTextAsync(m.Id);
-                        ShowToast(string.Format(i18n.CopiedIdFormat, m.Id));
+                        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                        if (clipboard != null)
+                        {
+                            await clipboard.SetTextAsync(m.Id);
+                            ShowToast(string.Format(i18n.CopiedIdFormat, m.Id));
+                        }
                     }
+                    catch { }
                 };
                 ctx.Items.Add(miCopyId);
+
+                var miCopyAll = new MenuItem { Header = i18n.MenuCopyAll };
+                miCopyAll.Click += async (s, e) =>
+                {
+                    try
+                    {
+                        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                        if (clipboard != null)
+                        {
+                            string info = string.Format("{0} | {1} | ID: {2}", m.Name, m.Ip, m.Id);
+                            await clipboard.SetTextAsync(info);
+                            ShowToast(i18n.CopiedAll);
+                        }
+                    }
+                    catch { }
+                };
+                ctx.Items.Add(miCopyAll);
+
+                if (!string.IsNullOrEmpty(m.Ip))
+                {
+                    ctx.Items.Add(new Separator());
+
+                    var miRdp = new MenuItem { Header = i18n.MenuRdp };
+                    miRdp.Click += (s, e) => LaunchRdp(m.Ip);
+                    ctx.Items.Add(miRdp);
+
+                    var miPing = new MenuItem { Header = i18n.MenuPing };
+                    miPing.Click += (s, e) => LaunchPing(m.Ip);
+                    ctx.Items.Add(miPing);
+
+                    var miOpenHttp = new MenuItem { Header = i18n.MenuOpenHttp };
+                    miOpenHttp.Click += (s, e) => LaunchBrowser("http://" + m.Ip);
+                    ctx.Items.Add(miOpenHttp);
+                }
 
                 itemBorder.ContextMenu = ctx;
                 _spMemberResults.Children.Add(itemBorder);
@@ -1897,6 +1979,87 @@ namespace SysMonitor.Linux.UI
             if (_lastZt != null) UpdateZeroTier(_lastZt);
             UpdateChipVisuals();
             ApplyMemberFilterAndSearch();
+        }
+
+        private static void LaunchRdp(string ip)
+        {
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    Process.Start(new ProcessStartInfo("mstsc.exe", "/v:" + ip) { UseShellExecute = true });
+                }
+                else
+                {
+                    string[] clients = { "remmina", "xfreerdp" };
+                    foreach (var client in clients)
+                    {
+                        try
+                        {
+                            var args = client == "remmina" ? $"-c rdp://{ip}" : $"/v:{ip}";
+                            Process.Start(new ProcessStartInfo(client, args) { UseShellExecute = false });
+                            return;
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private static void LaunchPing(string ip)
+        {
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    Process.Start(new ProcessStartInfo("cmd.exe", "/k ping " + ip) { UseShellExecute = true });
+                }
+                else
+                {
+                    string[] terms = { "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm" };
+                    foreach (var term in terms)
+                    {
+                        try
+                        {
+                            var psi = new ProcessStartInfo
+                            {
+                                FileName = term,
+                                Arguments = term == "gnome-terminal" ? $"-- bash -c \"ping {ip}; exec bash\"" : $"-e bash -c \"ping {ip}; exec bash\"",
+                                UseShellExecute = false
+                            };
+                            Process.Start(psi);
+                            return;
+                        }
+                        catch { }
+                    }
+                    Process.Start(new ProcessStartInfo("ping", ip) { UseShellExecute = false });
+                }
+            }
+            catch { }
+        }
+
+        private static void LaunchBrowser(string url)
+        {
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                }
+                else
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo("xdg-open", url) { UseShellExecute = false });
+                    }
+                    catch
+                    {
+                        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                    }
+                }
+            }
+            catch { }
         }
     }
 }
